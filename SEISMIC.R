@@ -1,0 +1,1081 @@
+suppressPackageStartupMessages(library(fitdistrplus))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(plyranges))
+suppressPackageStartupMessages(library(yaml))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(foreach))
+suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(DBI))
+suppressPackageStartupMessages(library(dbplyr))
+suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg19))
+suppressPackageStartupMessages(library(stringi))
+suppressPackageStartupMessages(library(inline))
+suppressPackageStartupMessages(library(Rcpp))
+
+main <- function(){
+  args <- commandArgs(trailingOnly = TRUE)
+  config <- read_yaml(args[1])
+  # Override the number of cores in config if desired. This does not change the results, but one might want to change it depending on server usage, without fiddling with config files.
+  if(length(args) > 1){
+    no_of_cores <- as.integer(args[2])
+  } else {
+    no_of_cores <- config$cores
+  }
+  
+  if(length(args) > 2){
+    config$cancer_type <- args[3]
+  }
+  
+  system(paste("mkdir -p", rpath(config$out_dir)))
+  
+  cat("Loading mutations, mutation effects, and regions\n")
+  all_mutations.gr <- read_mutations_from_db(rpath(config$mutations_path), "mutations", config$cancer_type)
+  no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
+  
+  # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
+  col_types <- c(list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character()), eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
+  test_regions.gr <- read_tsv(rpath(config$test_regions_path), col_types = do.call(cols, col_types)) %>%
+    rename_test_region(config$test_region_name) %>% 
+    as_granges()
+  
+  # Load mutation effects for every position in test_regions.gr
+  col_types <- c(list(seqnames = col_character(),
+                      start = col_integer(),
+                      end = col_integer(),
+                      strand = col_character(),
+                      refnuc = col_character(),
+                      ref_trinuc = col_character(),
+                      base_no = col_integer(),
+                      codon_no = col_integer(),
+                      C = col_character(),
+                      A = col_character(),
+                      G = col_character(),
+                      T = col_character()),
+                 eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
+  mut_effects.df <- read_tsv(rpath(config$mut_effects_path), col_types = do.call(cols, col_types)) %>% # This is typically large. Will it take more space than necessary in parallel foreach loop?
+    rename_test_region(config$test_region_name)
+  
+  # Start a list of test regions (typically genes) with everything that might be analysed based on every region that has annotations
+  # Filter to remove undesired regions later
+  test_region_list <- mut_effects.df$test_region %>% unique()
+  
+  cat("Annotating mutations\n")
+  # Annotate mutations with effect and test_region. Keep only those that are in mut_effects.df,
+  # and with effects in config$effects_to keep (e.g. non-silent mutations)
+  effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>% 
+    filter_mutation_effect_keep(config$effects_to_keep)
+  
+  cat("Calculating mutational frequencies\n")
+  
+  
+  if(config$sig_type == "patient"){
+    if(config$seq_type == "WXS"){
+      cat("Patient-specific signatures not available for WXS sequencing data. Change sig_type accordingly\n")
+      quit()
+    }
+    sig_string <- "patient_sig_"
+  } else if(config$sig_type == "cohort"){
+    sig_string <- "cohort_sig_"
+  } else if(config$sig_type == "flat"){
+    sig_string <- "flat_sig_"
+  } else {
+    cat("wrong/no sig_type specified\n")
+    quit()
+  }
+  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, rpath(config$trinuc_bgcount_path), sig_type = config$sig_type)
+  combined_mutfreqs.df <- combine_mutfreq_varnucs(mutfreqs.df)
+  
+  
+  
+  ################################################
+  # Scaling expectations preparation
+  ################################################
+  #
+  # Scaling! Currently, the scaling types are seq_type-specific
+  scale_with_regression <- FALSE
+  scale_silent_muts <- FALSE
+  # Scaling options for WXS - linear regressions with replication timing, expression data, or both
+  if(config$seq_type == "WXS"){
+    if(config$scale_exp_to_repl_reg || config$scale_exp_to_expr_reg){
+      cat("Performing regression for scaling expected mutations\n")
+      scale_with_regression <- TRUE
+      reglist <- initiate_regression_list(test_regions.gr, all_mutations.gr)
+      
+      if(config$scale_exp_to_repl_reg){
+        cat("  Replication timing\n")
+        reglist <- reglist %>%  scale_exp_to_repl_reg(config$repl_timing_path, test_regions.gr)
+      }
+      if(config$scale_exp_to_expr_reg){
+        cat("  Expression\n")
+        reglist <- reglist %>% scale_exp_to_expr_reg(rpath(config$expression_path), config$cancer_type)
+        if(!("log_expr" %in% config$variables)){
+          cat("    Expression scaling skipped\n")
+        }
+      }
+      
+      reglist <- make_scaling_regression(reglist, config$min_test_region_length_for_regression)
+      scaling_string <- reglist$scale_with_regression_string
+      
+      # Filter out test regions that we don't have regression data for
+      test_region_list <- test_region_list[test_region_list %in% reglist$test_region_mutrate$test_region]
+    }
+  } else if (config$seq_type == "WGS"){ # Scaling options for WGS - only silent mutations, currently.
+    if(config$scale_exp_with_silent_muts){
+      cat("Analysing silent mutations for scaling expected mutations\n")
+      scale_silent_muts <- TRUE
+      obs_exp_mut_count.df <- scale_exp_to_silent_muts(all_mutations.gr,
+                                                       effect_filtered_mutations.gr,
+                                                       test_regions.gr,
+                                                       mut_effects.df,
+                                                       mutfreqs.df,
+                                                       config$silent_mut_flank_upstream,
+                                                       config$silent_mut_flank_downstream)
+      scaling_string <-  paste0("silent_bkg_mutrate_flank_up_", config$silent_mut_flank_upstream, "_down_", config$silent_mut_flank_downstream, "_")
+      test_region_list <- test_region_list[test_region_list %in% filter(obs_exp_mut_count.df, silent_muts >= config$min_silent_mutations)$test_region]
+    } 
+  } else {
+    cat("Incorrect seq_type in config. Quitting\n")
+    quit()
+  }
+  # Set a scaling string for the output filename if no scaling was used.
+  if(!(scale_with_regression || scale_silent_muts)){
+    cat("No scaling\n")
+    scaling_string <- "unadjusted_bkg_mutrate_"
+  }
+  
+  
+  ################################################
+  # Filtering the test region list
+  ################################################
+  
+  # Filter test regions to only include those with enough mutations
+  test_region_list <- filter_test_regions_by_mut_count(test_region_list, effect_filtered_mutations.gr, config$min_mutations)
+  
+  if(config$remove_overlapping_test_regions){
+    test_region_list <- test_region_list %>% filter_overlapping_test_regions(test_regions.gr)
+  }
+  
+  # Make mut_effects.df a bit smaller by removing filtered test regions (after all filtering)
+  mut_effects.df <- mut_effects.df %>% filter(test_region %in% test_region_list)
+  
+  
+  if(length(test_region_list) == 0){
+    cat("No regions left for testing after filtering. Quitting\n")
+    quit()
+  }
+  
+  ################################################
+  # Analysis loop
+  ################################################
+  # regular_output_mode FALSE only used for development, not in normal use.
+  regular_output_mode <- TRUE
+  # Remove unnuecessary objects to decrease memory usage
+  rm(all_mutations.gr)
+  gc()
+
+  registerDoParallel(cores = no_of_cores)
+  ranks.df <- foreach(i = 1:length(test_region_list), .combine = 'bind_rows', .errorhandling = 'remove') %dopar% {
+    current_test_region <- test_region_list[i]
+    
+    
+    
+    # profvis({ # start memory profiling
+    cat(current_test_region, "\n")
+    
+    # Get only positions in the current test region
+    test_region_mut_effects.gr <- mut_effects.df %>% filter(test_region == current_test_region) %>% as_granges()
+    
+    # Get trinuc info in test region.
+    # For each base, get the trinuc, and include the effect of the 3 possible mutations
+    test_region_trinucs_all_mutations.df <- test_region_mut_effects.gr %>%
+      as_tibble() %>%
+      select(trinuc = ref_trinuc, C, A, G, T, base_no) %>%
+      pivot_longer(-c(trinuc, base_no), names_to = "varnuc", values_to = "effect") %>% 
+      filter(effect != "u") # 'u' refers to unchanged, e.g., A>A "mutation"
+    
+    # Further filter to effects included in config$effects_to_keep
+    # Most common example: keep only non-silent mutations in a gene
+    test_region_trinucs_effect_filtered_combined_varnucs.df <- test_region_trinucs_all_mutations.df %>% 
+      filter(effect %in% config$effects_to_keep) %>% 
+      group_by(trinuc, base_no) %>%
+      arrange(varnuc) %>%
+      summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
+    
+   # For use with filter_by_overlaps (smaller after reducing).
+    test_region_remaining.gr <- test_region_mut_effects.gr %>%
+      GenomicRanges::reduce()
+    
+    # Filter mutations to only look at those overlapping the test regions (e.g., the CDSs in a gene)
+    mutations.df <- effect_filtered_mutations.gr %>% 
+      filter_by_overlaps(test_region_remaining.gr) %>% 
+      as_tibble()
+    
+    # Take each mutation in a each gene and make a tibble with that info as binary "mutated" status
+    donor_mutated.df <- mutations.df %>% 
+      group_by(sampleID) %>% 
+      summarise(mutated = sign(dplyr::n()), .groups = 'drop')
+    
+    # Get probability of mutation at each base in the test region
+    mutprobs_per_base.df <- test_region_trinucs_effect_filtered_combined_varnucs.df %>%
+      inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
+      select(sampleID, pmut = mutfreq)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    # Set scaling factor. For the cohort_dist results, i.e. when not taking recurrence into account, scaling here is irrelevant.
+    if(scale_with_regression){
+      # Have to redo the probability of mutation at each base to include all mutations (not filtering e.g. silent)
+      # when calculating the expected number of mutations, as the observed mutation rate in reglist includes all mutations.
+      test_region_trinucs_all_mutations_combined_varnucs.df <- test_region_trinucs_all_mutations.df %>% 
+        group_by(trinuc, base_no) %>%
+        arrange(varnuc) %>%
+        summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
+
+      no_of_exp_mutations <- test_region_trinucs_all_mutations_combined_varnucs.df %>% 
+        inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
+        .$mutfreq %>%
+        sum()
+      
+      test_region_mutrate <- reglist$test_region_mutrate %>% filter(test_region == current_test_region)
+      new_no_of_exp_mutations <- predict(reglist$lm, test_region_mutrate) * test_region_mutrate$length
+      scaling_factor <- new_no_of_exp_mutations / no_of_exp_mutations
+    } else if(scale_silent_muts){
+      scaling_factor <- filter(obs_exp_mut_count.df, test_region == current_test_region)$obs_exp_silent_ratio
+    } else {
+      scaling_factor <- 1
+    }
+    # Mustn't set mutation probabilities negative, so abort loop iteration if scaling_factor<0
+    if(scaling_factor < 0){
+      # I would like a next statement here, but that doesn't seem to work with foreach. Therefore returning empty row.
+      return(tibble(test=character(),
+                    test_value=double(),
+                    rank=double(),
+                    (!!sym(config$test_region_name)):=character(),
+                    obs_mutated_count=double(),
+                    exp_mutated_count=double(),
+                    scaling_factor=double()))
+    }
+    
+    # Calculate the likelihood of any mutations (with the right effect) in the test region per patient,
+    # scaling probabilities if so configured. Also add mutated status.
+    mutprobs_test_region.df <- mutprobs_per_base.df %>%
+      group_by(sampleID) %>% 
+      summarise(exp_mut_count = sum(pmut * scaling_factor), pmut = 1 - prod(1 - pmut*scaling_factor), .groups = 'drop') %>% # 
+      left_join(donor_mutated.df, by = "sampleID") %>% 
+      replace_na(list(mutated = 0)) %>% 
+      mutate(p_no_mut = 1 - pmut) %>%
+      arrange(pmut)
+    
+    obs_no_of_mutated_patients <- mutprobs_test_region.df$mutated %>% sum()
+    
+    output.df <- tibble()
+    if(config$test_recurrence_alone || config$test_combined_model){
+      
+      # We can use the same simulations for testing with only recurrence, and with the combined model
+      sim_test_values <- sapply(1:config$no_of_simulations, function(x) sim_recurrence_and_combined_test_values(no_of_patients, mutprobs_test_region.df$pmut))
+      
+      
+      if(config$test_recurrence_alone){
+        
+        # This is needed for the gamma distribution fit, since 0 is not allowed.
+        # Can't be something really small like 10^-6 as that skews the distribution a lot, but 1 seems good.
+        extra_mut <- 1
+        
+        fit.gamma <- fitdist(sim_test_values[1,] + extra_mut, distr = "gamma", method = "mle", lower = 0)
+        
+        output.df <- tibble(scaling_factor = scaling_factor,
+                            expected_mutated_after_cohortdist_scaling = NA,
+                            test_value = obs_no_of_mutated_patients,
+                            rank = NA,
+                            p = pgamma(obs_no_of_mutated_patients + extra_mut, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F),
+                            test = "recurrence") %>% 
+          bind_rows(output.df)
+        
+        
+        
+        
+        
+        
+      }
+      
+      if(config$test_combined_model){
+
+        
+        test_value <- cohort_outcome_prob(mutprobs_test_region.df$p_no_mut, mutprobs_test_region.df$mutated)
+        rank <- test_value %>% get_obs_rank(sim_test_values[2,])
+        
+        output.df <- tibble(scaling_factor = scaling_factor,
+                            expected_mutated_after_cohortdist_scaling = NA,
+                            test_value = test_value,
+                            rank = rank,
+                            p = rank / (config$no_of_simulations + 1),
+                            test = "combined"
+                            ) %>% 
+          bind_rows(output.df)
+        
+      }
+      
+      
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    # This is the method that tests only for which patients have mutations, while ignoring recurrence
+    if(config$test_cohort_distribution_alone){
+
+      # To help optimize() find the scaling factor that gets exp_mutated = obs_mutated, we start by estimating what the factor should be, ignoring the non-linearity of the relationship between p(mutated) and exp_no_of_mutations
+      orig_exp_no_of_mutated_patients <- mutprobs_per_base.df %>%
+        group_by(sampleID) %>% 
+        summarise(pmut = 1 - prod(1 - pmut)) %>%
+        pull(pmut) %>%
+        sum()
+      naive_scaling_factor <- obs_no_of_mutated_patients / orig_exp_no_of_mutated_patients
+
+      # Try to find a scaling value where the expected number of MUTATED tumours is the same as what's observed.
+      scaling_factor_cohortdist <- optimize(function(x) calc_exp_mutated_with_scaling(x, mutprobs_per_base.df, obs_no_of_mutated_patients), interval = c(0, naive_scaling_factor * 10), tol = 0.01)$minimum
+      
+      
+      
+      mutprobs_test_region_cohortdist.df <- mutprobs_per_base.df %>%
+        group_by(sampleID) %>% 
+        summarise(exp_mut_count = sum(pmut * scaling_factor_cohortdist), pmut = 1 - prod(1 - pmut*scaling_factor_cohortdist), .groups = 'drop') %>% # 
+        left_join(donor_mutated.df, by = "sampleID") %>% 
+        replace_na(list(mutated = 0)) %>% 
+        mutate(p_no_mut = 1 - pmut) %>%
+        arrange(pmut)
+      
+      
+      expected_after_cohortdist_scaling <- sum(mutprobs_test_region_cohortdist.df$pmut)
+      
+      cohort_dist_scaling_ok <- TRUE
+      if(abs(obs_no_of_mutated_patients - expected_after_cohortdist_scaling) > 1){
+        cat("Cohort dist optimize scaling yields difference between observed and expected mutated patients of ",
+            obs_no_of_mutated_patients - expected_after_cohortdist_scaling,
+            " for ",
+            current_test_region,
+            ". Investigate whether the optimize function is finding the right scaling factor. \n")
+        cohort_dist_scaling_ok <- FALSE
+      }
+      
+
+      # With 0 mutations, the result will always be the same, so no point in running simulations. Faster to just output the answer (p -> 0.5 as no_of_sims -> Inf)
+      # Normally, the tool should not be analysing genes with 0 mutations, but it could happen during troubleshooting, for instance.
+      if(obs_no_of_mutated_patients == 0){
+        output.df <- tibble(
+          test_value = cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated),
+          scaling_factor = scaling_factor_cohortdist,
+          rank = config$no_of_simulations / 2 + 1,
+          test = "cohort_dist") %>%
+          bind_rows(output.df)
+      } else {
+        
+        if(cohort_dist_scaling_ok){
+          test_value <- cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated)
+          
+          
+          # This doesn't work well for very low mutated counts, particularly just 1 (since that's not unimodal at all). Even 2 seems fine though.
+          invisible(capture.output(
+          fit.gamma <- fitdist(-sapply(1:config$no_of_simulations,
+                                      function(x) cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut,
+                                                                      sim_fixed_mutated_count2(no_of_patients, obs_no_of_mutated_patients, mutprobs_test_region_cohortdist.df$exp_mut_count))),
+                               distr = "gamma",
+                               method = "mle")
+          ))
+  
+          output.df <- tibble(
+            test_value = test_value,
+            scaling_factor = scaling_factor_cohortdist,
+            expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
+            rank = NA,
+            p = pgamma(-test_value, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F),
+            test = "cohort_dist") %>%
+            bind_rows(output.df)
+        } else {
+          # Output NA row if there was a problem getting the cohort dist scaling right.
+          output.df <- tibble(
+            test_value = NA,
+            scaling_factor = scaling_factor_cohortdist,
+            expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
+            rank = NA,
+            p = NA,
+            test = "cohort_dist") %>%
+            bind_rows(output.df)
+        }
+      }
+      
+    }
+
+    # If no tests were performed, output dummy row so that we can get obs/exp values etc without running simulations
+    if(nrow(output.df) == 0){
+      output.df <- output.df %>% bind_rows(tibble(test = NA, test_value = NA, rank = NA))
+    }
+    
+
+    
+    if(regular_output_mode){
+      output.df %>%
+        mutate((!!sym(config$test_region_name)) := current_test_region,
+               obs_mutated_count = obs_no_of_mutated_patients,
+               exp_mutated_count = sum(mutprobs_test_region.df$pmut))
+    } else {
+      # This bit is used to look at patients' mutated status/mutations count, exp mut count and p_mutated for the cohort dist method
+      mutprobs_test_region_cohortdist.df %>%
+        left_join(mutations.df %>% count(sampleID, name = 'mutations')) %>%
+        replace_na(list(mutations = 0)) %>%
+        mutate(gene = current_test_region)
+    }
+    
+  }
+  # End of loop
+  
+  ##################################
+  # Output
+  ##################################
+
+  ranks.df %>%
+    write_tsv(rpath(paste0(config$out_dir,
+                           config$out_base_name, "_",
+                           scaling_string,
+                           sig_string,
+                           config$cancer_type,
+                           "_min_", config$min_mutations, "_muts",
+                           "_", config$no_of_simulations, "_sims.tsv")))
+    
+  
+  cat("Done!\n")
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+################################################
+# Read/write files
+################################################
+
+# Read mutations from sqlite database file
+# filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
+read_mutations_from_db <- function(path, table_name, cancer_type){
+  mydb <- dbConnect(RSQLite::SQLite(), path)
+  gr <- tbl(mydb, table_name) %>% 
+    { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>% 
+    # filter(cancer == cancer_type) %>%
+    collect() %>% 
+    as_granges() %>%
+    select(cancer, sampleID, varnuc, trinuc)
+  dbDisconnect(mydb)
+  return(gr)
+}
+
+# Read mut_effects for a certain test_region (e.g. gene) from sqlite database file
+# Used so as to not have to keep too much data in memory
+read_mut_effects_from_db <- function(path, table_name, test_region_name){
+  mydb <- dbConnect(RSQLite::SQLite(), path)
+  df <- tbl(mydb, table_name) %>% 
+    filter(test_region == test_region_name) %>%
+    collect()
+  dbDisconnect(mydb)
+  return(df)
+}
+
+# Write a dataframe to a sqlite database
+write_df_to_db <- function(df, path, table_name){
+  mydb <- dbConnect(RSQLite::SQLite(), path)
+  dbWriteTable(mydb, table_name, df)
+  dbDisconnect(mydb)
+}
+
+# Read mutations from .tsv file
+# filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
+read_mutations_from_tsv <- function(path, cancer_type){
+  read_tsv(rpath(config$mutations_path), col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
+    filter(cancer == config$cancer_type) %>% 
+    as_granges() %>%
+    select(sampleID, varnuc, trinuc)
+}
+
+
+
+
+################################################
+# Mutation annotation and effect filtering
+################################################
+
+# Annotate mutations in mut_effects regions
+annotate_mutations <- function(mutations.gr, mut_effects.df){
+  mutations.gr %>%
+    as_tibble() %>%
+    mutate(seqnames = as.character(seqnames), strand = as.character(strand)) %>% # For joining. Might be better to make mut_effects columns factors, but I'm wary of getting the levels wrong
+    inner_join(mut_effects.df, by = c("seqnames", "start", "end", "strand")) %>%
+    pivot_longer(c("C","A","G","T"), names_to = "effect_varnuc", values_to = "effect") %>% 
+    filter(effect_varnuc == varnuc) %>%
+    select(-effect_varnuc) %>% 
+    as_granges()
+}
+
+# Filter mutation effect by what to keep
+filter_mutation_effect_keep <- function(mutations_with_effects.gr, effects){
+  filter(mutations_with_effects.gr, effect %in% effects)
+}
+
+# Filter mutation effect by what to remove
+filter_mutation_effect_remove <- function(mutations_with_effects.gr, effects){
+  filter(mutations_with_effects.gr, !(effect %in% effects))
+}
+
+
+
+
+################################################
+# Mutation frequencies
+################################################
+
+# Function to calculate mutation frequencies per trinuc and varnuc in each patient.
+# For WXS data, estimate patient-specific mutation frequencies by scaling cohort-level mutation frequencies to mutational burden in patients
+calculate_mutfreqs <- function(mutations.gr, trinuc_bg_path, sig_type){
+  # Read trinuc bg counts for correct region (cds regions/whole genome)
+  trinuc_bg_counts.df <- read_tsv(trinuc_bg_path, col_types = cols(trinuc = col_character(), count = col_double()))
+  
+  # All combinations of patient, trinuc (pyr-centric) and varnuc (in order to add missing rows to mut_burden/mut_freqs)
+  DNA_bases <- c("A", "C", "G", "T")
+  patients <- mutations.gr$sampleID %>% unique()
+  all_combos <- expand_grid(varnuc=DNA_bases, trinuc=get_pyr_trinucs(), sampleID=patients) %>%
+    filter(substr(trinuc, 2, 2) != varnuc)
+  
+  # Separate mutfreq calculations for wgs and wxs, since wxs doesn't have enough mutations to do it the same way as wgs. Can use the wxs method for wgs as well (use_cohort_sig)
+  if(sig_type == "cohort"){
+    # Calculate mutation counts per patient 
+    mut_burden.df <- mutations.gr %>%
+      as_tibble() %>%
+      count(cancer, sampleID) %>%
+      arrange(desc(n))
+    
+    muts_per_cancer_type.df <- mutations.gr %>% 
+      as_tibble() %>% 
+      count(cancer, name = 'muts_per_cancer_type')
+    
+    # Calculate mutfreq for all patients together, and normalise by mutation count to get mutfreq_per_mut
+    cohort_mutfreq.df <- mutations.gr %>%
+      as_tibble() %>%
+      count(cancer, varnuc, trinuc, name = "burden") %>%
+      left_join(trinuc_bg_counts.df, by = "trinuc") %>%
+      left_join(muts_per_cancer_type.df, by = 'cancer') %>% 
+      mutate(mutfreq = burden / count) %>% 
+      mutate(mutfreq_per_mut = mutfreq / muts_per_cancer_type)
+    
+    # Combine cohort mutfreq and patient mutation burdens to estimate patient mutfreqs.
+    mutfreqs.df <- all_combos %>% 
+      left_join(mut_burden.df, by = "sampleID") %>% 
+      left_join(cohort_mutfreq.df %>% select(cancer, trinuc, varnuc, mutfreq_per_mut), by = c("cancer", "varnuc", "trinuc")) %>% 
+      mutate(mutfreq = mutfreq_per_mut * n) %>% 
+      select(-mutfreq_per_mut, -n)
+    
+  } else if(sig_type == "patient"){
+    # Calculate mutation burden per trinuc and varnuc, for each patient
+    mut_burden.df <- mutations.gr %>%
+      as_tibble() %>%
+      count(cancer, sampleID, varnuc, trinuc, name = "burden") %>%
+      complete(all_combos) %>%
+      replace_na(list(burden = 0))
+    
+    # Combine with trinuce bg counts and calculate mutfreqs
+    mutfreqs.df <- mut_burden.df %>% 
+      left_join(trinuc_bg_counts.df, by = "trinuc") %>% 
+      mutate(mutfreq = burden / count) %>%
+      select(-burden, -count)
+    
+  } else if(sig_type == "flat"){
+    mut_burden.df <- mutations.gr %>% 
+      as_tibble() %>% 
+      count(cancer, sampleID) %>% 
+      arrange(desc(n))
+    
+    total_trinucs <- trinuc_bg_counts.df %>% filter(substr(trinuc, 2, 2) %in% c("C", "T")) %>% pull(count) %>% sum()
+    
+    mutfreqs.df <- mut_burden.df %>%
+      mutate(mutfreq = n / total_trinucs) %>% 
+      left_join(all_combos, by = "sampleID") %>% 
+      mutate(mutfreq = mutfreq / 3) %>% # Equal distribution between the three possible mutations at a base
+      select(-n)
+  } else {
+    cat("wrong sig_type\n")
+    quit()
+  }
+  
+  # Make sure mutation types that aren't represented are 0 instead of NA when returning
+  mutfreqs.df %>% 
+    replace_na(list(mutfreq = 0))
+}
+
+# Expand mutfreqs df to show the sum of each combination of varnucs for each trinuc.
+# Basically useful so that we can calculate the expected number of mutations for each patient at any site, and only do it once instead of once per gene.
+# Example, what's the mutfreq for patient n at a TCC>G/A (TCC>T silent in this scenario)? Useful.
+combine_mutfreq_varnucs <- function(mutfreqs.df){
+  combined_mutfreqs.df <- tibble()
+  for(trinuc_iter in get_pyr_trinucs()){
+    for(combined_muttype_iter in c("A", "C", "G", "T", "AC", "AG", "AT", "CG", "CT", "GT", "ACG", "ACT", "AGT", "CGT")){# Viktigt att de är i bokstavsordning (AGT istället för ATG)
+      separate_muttypes <- combined_muttype_iter %>% str_split('') %>% unlist()
+      if( !(str_sub(trinuc_iter, 2, 2) %in% separate_muttypes)){
+        combined_mutfreqs.df <- mutfreqs.df %>%
+          filter(trinuc == trinuc_iter, varnuc %in% separate_muttypes) %>% 
+          group_by(sampleID, cancer, trinuc) %>% 
+          summarise(mutfreq = sum(mutfreq), .groups = 'drop') %>% 
+          mutate(combined_muttype = combined_muttype_iter) %>% 
+          bind_rows(combined_mutfreqs.df)
+      }
+    }
+  }
+  return(combined_mutfreqs.df)
+}
+
+
+
+
+
+################################################
+# Scaling mutation expectations - WXS
+################################################
+
+initiate_regression_list <- function(test_regions.gr, all_mutations.gr){
+  reglist <- list()
+  reglist$variables <- character()
+  reglist$scale_with_regression_string <- character()
+  reglist$test_region_mutrate <- calculate_test_region_mutrate(test_regions.gr, all_mutations.gr)
+  return(reglist)
+}
+
+calculate_test_region_mutrate <- function(test_regions.gr, all_mutations.gr){
+  # Get test region lengths
+  test_region_lengths.df <- test_regions.gr %>%
+    as_tibble() %>%
+    group_by(test_region) %>%
+    summarise(length = sum(width), .groups = 'drop')
+  
+  # Calculate mutation rates in test regions
+  hits <- findOverlaps(test_regions.gr, all_mutations.gr, ignore.strand = TRUE)
+  mutrate.df <- tibble(test_region = test_regions.gr[hits@from]$test_region) %>% 
+    count(test_region, name = "mutations") %>% 
+    inner_join(test_region_lengths.df, by = "test_region") %>% 
+    mutate(mutrate = mutations / length)
+  
+  return(mutrate.df)
+}
+
+# Add replication timing data and variable to reglist
+scale_exp_to_repl_reg <- function(reglist, repl_timing_path, test_regions.gr){
+  # Load repl timing data
+  repl_timing.gr <- import.bed(repl_timing_path) %>% 
+    filter(score != 0) # 0 means undefined, I think. Have to get rid of it.
+  
+  # Assign S50 values to genes
+  hits <- findOverlaps(test_regions.gr, repl_timing.gr, ignore.strand = TRUE)
+  test_region_timing.df <- tibble(test_region = test_regions.gr[hits@from]$test_region, S50 = repl_timing.gr[hits@to]$score) %>% 
+    group_by(test_region) %>% 
+    summarise(S50 = mean(S50), .groups = 'drop')
+  
+  reglist$test_region_mutrate <- reglist$test_region_mutrate %>% inner_join(test_region_timing.df, by = "test_region")
+  reglist$variables <- c(reglist$variables, "S50")
+  reglist$scale_with_regression_string <- c(reglist$scale_with_regression_string, "repl_timing_")
+  
+  return(reglist)
+}
+
+# Add expression data and variable to reglist
+scale_exp_to_expr_reg <- function(reglist, expression_path, cancer_type){
+  expression.df <- read_tsv(expression_path, col_types = cols(gene = col_character(), expression = col_double(), cancer = col_character())) %>%
+    filter(cancer == cancer_type) %>% 
+    filter(expression != 0) %>% # Necessary if we use log(expr). Removes a lot of genes, but not many that would otherwise be included, I think.
+    mutate(log_expr = log(expression))
+  
+  if(nrow(expression.df) == 0){
+    return(reglist)
+  }
+  
+  reglist$test_region_mutrate <- reglist$test_region_mutrate %>% inner_join(expression.df %>% dplyr::rename(test_region = gene), by = "test_region") # This renaming might not work well if we're analysing something other than genes - we still want to do this operation by gene.
+  reglist$variables <- c(reglist$variables, "log_expr")
+  reglist$scale_with_regression_string <- c(reglist$scale_with_regression_string, "expression_")
+  
+  return(reglist)
+}
+
+# Make regression with data and variables in reglist
+make_scaling_regression <- function(reglist, min_test_region_length_for_regression){
+  f <- as.formula(
+    paste("mutrate", 
+          paste(reglist$variables, collapse = " + "), 
+          sep = " ~ "))
+  
+  reglist$lm <- reglist$test_region_mutrate %>% 
+    filter(length > min_test_region_length_for_regression) %>% 
+    lm(f, data = .)
+  reglist$scale_with_regression_string <- c(reglist$scale_with_regression_string,
+                                            "bkg_mutrate_min_",
+                                            min_test_region_length_for_regression,
+                                            "_bp_genes_reg_") %>% 
+    paste0(collapse="")
+  
+  return(reglist)
+}
+
+
+
+
+
+################################################
+# Scaling mutation expectations - WGS
+################################################
+
+# Count silent mut positions in test_regions.gr, and around them.
+# Note that only the effect "s" counts as silent, so if we're analysing e.g. TFBSs, then we can avoid counting
+# the mutations in them by annotating them with anything else, like "na". Then, only the mutations around them will be used.
+count_silent_mut_positions <- function(mut_effects.df, test_regions.gr, flank_upstream, flank_downstream){
+  # Make GRanges with one range per test region, encompassing all ranges for each test region (e.g., make one range with the transcript based on cds regions)
+  # Then extend upstream and downstream by desired amounts.
+  # Requires that all ranges in a test_region are on the same chromosome and strand
+  test_region_span_with_flanks.gr <- test_regions.gr %>% 
+    get_gr_region_range("test_region") %>% 
+    extend_gr_flanks(flank_upstream, flank_downstream)
+
+  # Remove parts of test_region_span_with_flanks.gr that overlap with test_regions.gr TEST_REGION-WISE.
+  # This means that transcribed regions (minus cds regions) are allowed to belong to multiple genes, for the purposes of counting synonymous mutations, which are used to estimate gene-level background mutation rate.
+  # Since I can't group_by gene and use intersect on each group, I combined chrom and gene into artificial seqlevels, pretending each gene is on a different chromosome.
+  # This hack means I can use intersect gene-wise, which is WAY faster than e.g. splitting up the txn.gr based on gene and using intersect once per gene.
+  silent_regions.gr <- setdiff(test_region_span_with_flanks.gr %>% make_fake_paste_column_chrom("test_region", sep = "¨"),
+                               test_regions.gr %>% make_fake_paste_column_chrom("test_region", sep = "¨")) %>%
+    as_tibble() %>%
+    separate(seqnames, into=c("chrom", "test_region"), sep = "¨") %>%
+    select(seqnames = chrom, start, end, strand, test_region) %>%
+    as_granges()
+  
+  # For each gene, count the number of trinucleotides in introns + gene flanks.
+  # Use that count for each possible varnuc, as every SNV in an intron counts as silent
+  intron_trinuc_count.df <- getSeq(BSgenome.Hsapiens.UCSC.hg19, silent_regions.gr) %>% 
+    trinucleotideFrequency() %>% 
+    as_tibble() %>% 
+    mutate(test_region = silent_regions.gr$test_region) %>%
+    pivot_longer(-test_region, names_to="trinuc", values_to="count") %>% 
+    group_by(test_region, trinuc) %>%
+    summarise(count = sum(count), .groups = "drop") %>%
+    mutate(trinuc = ifelse(substr(trinuc, 2, 2) %in% c("C", "T"), trinuc, str_revcomp(trinuc))) %>% 
+    group_by(test_region, trinuc) %>% 
+    summarise(count = sum(count), .groups = "drop") %>% 
+    mutate(A = count, T = count, C = count, G = count) %>% 
+    select(-count) %>% 
+    pivot_longer(c(A, T, C, G), names_to = "varnuc", values_to = "count") %>% 
+    filter(substr(trinuc, 2, 2) != varnuc)
+    
+  # For each rest_region (gene), count the number of silent mutation positions in each combination of trinuc and varnuc
+  # Current data.table solution much faster than previous dbplyr version.
+  exon_silent_count.df <- mut_effects.df %>% 
+    dplyr::rename(trinuc=ref_trinuc) %>% 
+    setDT() %>% 
+    .[,list(T=ifelse(T == "s", 1, 0),
+            C=ifelse(C == "s", 1, 0),
+            G=ifelse(G == "s", 1, 0),
+            A=ifelse(A == "s", 1, 0),
+            test_region,
+            trinuc)] %>% 
+    .[, list(T = sum(T), C = sum(C), G = sum(G), A = sum(A)), .(test_region, trinuc)] %>% 
+    as_tibble() %>% 
+    pivot_longer(c(C, A, G, T), names_to = "varnuc", values_to="count") %>% 
+    filter(substr(trinuc, 2, 2) != varnuc)
+    
+  all_combos <- expand_grid(varnuc=c("A", "C", "G", "T"),
+                            trinuc=get_pyr_trinucs(),
+                            test_region = unique(test_regions.gr$test_region)) %>%
+    filter(substr(trinuc, 2, 2) != varnuc) %>% 
+    mutate(count = 0)
+  
+  silent_mut_pos.df <- exon_silent_count.df %>% 
+    bind_rows(intron_trinuc_count.df) %>% 
+    bind_rows(all_combos) %>% 
+    group_by(test_region, trinuc, varnuc) %>% 
+    summarise(count = sum(count), .groups = 'drop')
+  
+  return(silent_mut_pos.df)
+}
+
+
+scale_exp_to_silent_muts <- function(all_mutations.gr, effect_filtered_mutations.gr, test_regions.gr, mut_effects.df, mutfreqs.df, flank_upstream, flank_downstream){
+  silent_mut_pos.df <- count_silent_mut_positions(mut_effects.df, test_regions.gr, flank_upstream, flank_downstream)
+  
+  # calculate the expected number of silent mutations per gene for all genes we've decided to analyse .
+  expected_silent_muts.df <- silent_mut_pos.df %>%
+    # filter(test_region %in% test_region_list) %>% 
+    dplyr::rename(bg_count = count) %>%
+    inner_join(mutfreqs.df, by = c("trinuc", "varnuc")) %>%
+    mutate(exp_silent_muts = mutfreq * bg_count) %>% 
+    setDT() %>% 
+    .[, list( exp_silent_muts = sum(exp_silent_muts)), .(test_region)] %>% # This summarise could crash with too big datasets using tidyverse
+    as_tibble()
+  
+  
+  
+  # Get mutations that are in effect_filtered_mutations. OBS! Not necessarily all non-silent. Depends on what's specified in effect_to_keep.
+  # But anything other than that effect will be regarded as silent. Might need to change this at some point, but I only see myself using it
+  # to either count non-silent mutations as non-silent, or all mutations as non-silent, in case we don't want to include any mutations in
+  # the test_region in the silent mutation count (e.g. in a TFBS)
+  nonsilent_mut_count.df <- effect_filtered_mutations.gr %>%
+    get_gr_region_range_count("test_region", "nonsilent_muts")
+  
+  test_region_span_with_flanks.gr <- test_regions.gr %>% 
+    get_gr_region_range("test_region") %>% 
+    extend_gr_flanks(flank_upstream, flank_downstream)
+  
+  hits <- findOverlaps(all_mutations.gr, test_region_span_with_flanks.gr, ignore.strand = TRUE)
+  mut_count_per_test_region.df <- tibble(test_region = test_region_span_with_flanks.gr$test_region[hits@to]) %>% 
+    count(test_region, name = 'all_mutations') %>% 
+    left_join(nonsilent_mut_count.df, by = "test_region") %>% 
+    replace_na(list(nonsilent_muts = 0)) %>% 
+    mutate(silent_muts = all_mutations - nonsilent_muts)
+  
+  # Calculate the ratio of observed and expected silent mutations, used to scale the expected number of mutations
+  obs_exp_mut_count.df <- mut_count_per_test_region.df %>% 
+    left_join(expected_silent_muts.df, by = "test_region") %>% 
+    mutate(obs_exp_silent_ratio = silent_muts / exp_silent_muts)
+  
+  return(obs_exp_mut_count.df)
+}
+
+
+
+
+################################################
+# Scaling mutation expectations - Cohort distribution
+################################################
+
+calc_exp_mutated_with_scaling <- function(scaling, mutprobs_per_base.df, observed_mutated_count){
+  new_exp <- mutprobs_per_base.df %>%
+    group_by(sampleID) %>% 
+    summarise(pmut = 1 - prod(1 - pmut*scaling), .groups = 'drop') %>% 
+    pull(pmut) %>% 
+    sum()
+  abs(log2(new_exp / observed_mutated_count))
+}
+
+
+
+
+
+################################################
+# Filter test regions
+################################################
+
+# Filter test regions (e.g. genes) by how many mutations of a certain effect (e.g. non-silent - i.e. n and m) they have.
+# Return list of regions that have >= config$min_mutations
+filter_test_regions_by_mut_count <- function(test_region_list, mutations.gr, min_mutations){
+  if(min_mutations > 0){
+    regions_to_keep <- mutations.gr %>% 
+      as_tibble() %>% 
+      count(test_region, name = "effect_filtered_mutations") %>% 
+      filter(effect_filtered_mutations >= min_mutations) %>%
+      .$test_region
+    
+    return(test_region_list[test_region_list %in% regions_to_keep])
+  } else {
+    return(test_region_list)
+  }
+}
+
+# Remove overlapping test regions from regions to analyse
+filter_overlapping_test_regions <- function(test_region_list, test_regions.gr){
+  overlap_diff.df <- test_regions.gr %>%
+    findOverlaps(., ., ignore.strand = TRUE) %>% 
+    as_tibble() %>% 
+    filter(subjectHits != queryHits)
+  regions_to_remove <- test_regions.gr[overlap_diff.df$queryHits]$test_region %>% unique()
+  
+  return(test_region_list[!(test_region_list %in% regions_to_remove)])
+}
+
+
+
+
+
+################################################
+# Outcome probability and simulations
+################################################
+
+# Function to calculate the likelihood of a cohort outcome given patient gene mutation probabilities
+# no_mut_probs - Probabilities of NO mutation for each patient. Slightly faster to supply that from the start than to perform the conversion from mutation probabilites in this function millions of times.
+# outcome - Mutated or not (1/0) for each patient
+cohort_outcome_prob <- function(no_mut_probs, outcome){
+  return(sum(log(abs(outcome - no_mut_probs)))) # sum(log()) instead of log(prod()) (logA + logB = logAB) as the latter can result in too small numbers for R.
+}
+
+# Get rank of first value in vector of c(obs_test_value, sim_test_values)
+get_obs_rank <- function(obs_test_value, sim_test_values){
+  rank(c(obs_test_value, sim_test_values))[1]
+}
+
+# Function that gets both no_of_mutated_patients and logp_outcome from a (simulated) cohort outcome
+# Used so that we can get get both values from the same set of simulations without saving every outcome vector
+sim_recurrence_and_combined_test_values <- function(no_of_patients, pmut){
+  sim <- rbinom(no_of_patients, 1, pmut)
+  c(sum(sim), cohort_outcome_prob(1 - pmut, sim))
+}
+
+# Function to simulate an outcome with a fixed number of mutations
+# This uses the standard R sampling method, which is unfortunately really slow when
+# replacement=FALSE and the prob weights are used. See improved sim_fixed_mutated_count2 below.
+sim_fixed_mutated_count <- function(no_of_patients, no_of_mutations, exp_mut_counts) {
+  result <- numeric(no_of_patients)
+  result[sample(1:no_of_patients, size=no_of_mutations, prob = exp_mut_counts)] <-  1
+  result
+}
+
+
+
+################################################
+# Improved sampling method to speed up sampling without replacement, with probability weights.
+# https://stackoverflow.com/questions/15113650/faster-weighted-sampling-without-replacement
+################################################
+
+src <- 
+  '
+int num = as<int>(size), x = as<int>(n);
+Rcpp::NumericVector vx = Rcpp::clone<Rcpp::NumericVector>(x);
+Rcpp::NumericVector pr = Rcpp::clone<Rcpp::NumericVector>(prob);
+Rcpp::NumericVector rnd = rexp(x) / pr;
+for(int i= 0; i<vx.size(); ++i) vx[i] = i;
+std::partial_sort(vx.begin(), vx.begin() + num, vx.end(), Comp(rnd));
+vx = vx[seq(0, num - 1)] + 1;
+return vx;
+'
+incl <- 
+  '
+struct Comp{
+  Comp(const Rcpp::NumericVector& v ) : _v(v) {}
+  bool operator ()(int a, int b) { return _v[a] < _v[b]; }
+  const Rcpp::NumericVector& _v;
+};
+'
+faster_sample <- cxxfunction(signature(n = "Numeric", size = "integer", prob = "numeric"),
+                       src, plugin = "Rcpp", include = incl)
+
+
+sim_fixed_mutated_count2 <- function(no_of_patients, no_of_mutations, exp_mut_counts) {
+  result <- numeric(no_of_patients)
+  result[faster_sample(no_of_patients, no_of_mutations, exp_mut_counts)] <-  1
+  result
+}
+
+
+################################################
+# Utility
+################################################
+
+rpath <- rprojroot::is_rstudio_project$make_fix_file()
+
+str_revcomp <- function(str){
+  return(stri_reverse(chartr("TCGA", "AGCT", str)))
+}
+
+get_pyr_trinucs <- function(){
+  DNA_bases <- c("A", "C", "G", "T")
+  pyrs <- c("C", "T")
+  pyr_trinucs <- expand.grid(DNA_bases, pyrs, DNA_bases) %>% apply(1, paste0, collapse="")
+  return(pyr_trinucs)
+}
+
+# Rename region grouping to be tested (most often gene) to "test_region"
+rename_test_region <- function(df, test_region_name){
+  dplyr::rename(df, test_region = (!!sym(test_region_name)))
+}
+
+# Get full range spanned by ranges with the same column_name, e.g. start of first cds to end of last cds for a gene
+get_gr_region_range <- function(gr, column_name){
+  gr %>%
+    as_tibble() %>% 
+    group_by((!!sym(column_name)), seqnames, strand) %>% 
+    summarise(start = min(start), end = max(end), .groups = "drop") %>% 
+    as_granges()
+}
+
+# Extend flanks of gr
+extend_gr_flanks <- function(gr, flank_upstream, flank_downstream){
+  gr %>% 
+    {stretch(anchor_5p(.), flank_downstream)} %>% 
+    {stretch(anchor_3p(.), flank_upstream)}
+}
+
+get_gr_region_range_count <- function(gr, region_column_name, count_column_name){
+  gr %>%
+    as_tibble() %>%
+    group_by((!!sym(region_column_name))) %>%
+    summarise((!!sym(count_column_name)) := dplyr::n(), .groups = "drop")
+}
+
+# Take a gr, and change seqnames to a combination of seqnames and whatever column "column_name" is.
+# Useful for GenomicRanges uperation that automatically reduce when we don't want that.
+# For instance, when using setdiff, and reduce is undersired between different genes, this function will create seqnames like "chr1_RPL13A"
+# Store the original true chromosome in chrom column
+make_fake_paste_column_chrom <- function(gr, column_name, sep = "_"){
+  gr %>% 
+    as_tibble() %>% 
+    mutate(chrom = seqnames) %>%
+    mutate(seqnames = paste0(chrom, sep, (!!sym(column_name)))) %>%
+    as_granges()
+}
+
+
+
+
+################################################
+# Run the main function
+################################################
+
+if (!interactive()) {
+  main()
+}
+
