@@ -26,15 +26,15 @@ main <- function(){
     config$cancer_type <- args[3]
   }
   
-  system(paste("mkdir -p", rpath(config$out_dir)))
+  system(paste("mkdir -p", config$out_dir))
   
   cat("Loading mutations, mutation effects, and regions\n")
-  all_mutations.gr <- read_mutations_from_tsv(rpath(config$mutations_path), config$cancer_type)
+  all_mutations.gr <- read_mutations_from_tsv(config$mutations_path, config$cancer_type)
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
   col_types <- c(list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character()), eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
-  test_regions.gr <- read_tsv(rpath(config$test_regions_path), col_types = do.call(cols, col_types)) %>%
+  test_regions.gr <- read_tsv(config$test_regions_path, col_types = do.call(cols, col_types)) %>%
     rename_test_region(config$test_region_name) %>% 
     as_granges()
   
@@ -52,7 +52,7 @@ main <- function(){
                       G = col_character(),
                       T = col_character()),
                  eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
-  mut_effects.df <- read_tsv(rpath(config$mut_effects_path), col_types = do.call(cols, col_types)) %>% # This is typically large. Will it take more space than necessary in parallel foreach loop?
+  mut_effects.df <- read_tsv(config$mut_effects_path, col_types = do.call(cols, col_types)) %>% # This is typically large. Will it take more space than necessary in parallel foreach loop?
     rename_test_region(config$test_region_name)
   
   # Start a list of test regions (typically genes) with everything that might be analysed based on every region that has annotations
@@ -82,7 +82,7 @@ main <- function(){
     cat("wrong/no sig_type specified\n")
     quit()
   }
-  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, rpath(config$trinuc_bgcount_path), sig_type = config$sig_type)
+  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, config$trinuc_bgcount_path, sig_type = config$sig_type)
   combined_mutfreqs.df <- combine_mutfreq_varnucs(mutfreqs.df)
   
   
@@ -107,7 +107,7 @@ main <- function(){
       }
       if(config$scale_exp_to_expr_reg){
         cat("  Expression\n")
-        reglist <- reglist %>% scale_exp_to_expr_reg(rpath(config$expression_path), config$cancer_type)
+        reglist <- reglist %>% scale_exp_to_expr_reg(config$expression_path, config$cancer_type)
         if(!("log_expr" %in% config$variables)){
           cat("    Expression scaling skipped\n")
         }
@@ -450,13 +450,13 @@ main <- function(){
   ##################################
 
   ranks.df %>%
-    write_tsv(rpath(paste0(config$out_dir,
-                           config$out_base_name, "_",
-                           scaling_string,
-                           sig_string,
-                           config$cancer_type,
-                           "_min_", config$min_mutations, "_muts",
-                           "_", config$no_of_simulations, "_sims.tsv")))
+    write_tsv(paste0(config$out_dir,
+                     config$out_base_name, "_",
+                     scaling_string,
+                     sig_string,
+                     config$cancer_type,
+                     "_min_", config$min_mutations, "_muts",
+                     "_", config$no_of_simulations, "_sims.tsv"))
     
   
   cat("Done!\n")
@@ -538,7 +538,7 @@ write_df_to_db <- function(df, path, table_name){
 # Read mutations from .tsv file
 # filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
 read_mutations_from_tsv <- function(mutations_path, cancer_type){
-  read_tsv(rpath(mutations_path), col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
+  read_tsv(mutations_path, col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
     # filter(cancer == cancer_type) %>% 
     { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
     as_granges() %>%
@@ -1015,8 +1015,6 @@ sim_fixed_mutated_count2 <- function(no_of_patients, no_of_mutations, exp_mut_co
 ################################################
 # Utility
 ################################################
-
-rpath <- rprojroot::is_rstudio_project$make_fix_file()
 
 str_revcomp <- function(str){
   return(stri_reverse(chartr("TCGA", "AGCT", str)))
