@@ -5,8 +5,8 @@ suppressPackageStartupMessages(library(yaml))
 suppressPackageStartupMessages(library(data.table))
 suppressPackageStartupMessages(library(foreach))
 suppressPackageStartupMessages(library(doParallel))
-suppressPackageStartupMessages(library(DBI))
-suppressPackageStartupMessages(library(dbplyr))
+# suppressPackageStartupMessages(library(DBI))
+# suppressPackageStartupMessages(library(dbplyr))
 suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg19))
 suppressPackageStartupMessages(library(stringi))
 suppressPackageStartupMessages(library(inline))
@@ -29,7 +29,7 @@ main <- function(){
   system(paste("mkdir -p", rpath(config$out_dir)))
   
   cat("Loading mutations, mutation effects, and regions\n")
-  all_mutations.gr <- read_mutations_from_db(rpath(config$mutations_path), "mutations", config$cancer_type)
+  all_mutations.gr <- read_mutations_from_tsv(rpath(config$mutations_path), config$cancer_type)
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
@@ -537,11 +537,12 @@ write_df_to_db <- function(df, path, table_name){
 
 # Read mutations from .tsv file
 # filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
-read_mutations_from_tsv <- function(path, cancer_type){
-  read_tsv(rpath(config$mutations_path), col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
-    filter(cancer == config$cancer_type) %>% 
+read_mutations_from_tsv <- function(mutations_path, cancer_type){
+  read_tsv(rpath(mutations_path), col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
+    # filter(cancer == cancer_type) %>% 
+    { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
     as_granges() %>%
-    select(sampleID, varnuc, trinuc)
+    select(cancer, sampleID, varnuc, trinuc)
 }
 
 
