@@ -450,6 +450,7 @@ main <- function(){
   ##################################
 
   ranks.df %>%
+  arrange(test, p) %>%
     write_tsv(paste0(config$out_dir,
                      config$out_base_name, "_",
                      scaling_string,
