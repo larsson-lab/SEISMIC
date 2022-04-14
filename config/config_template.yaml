@@ -1,0 +1,43 @@
+mut_effects_path: "data/gene_cds_tiled_mut_effect.tsv.gz" # Path to mutation effect file
+mutations_path: "demo/TCGA_UCEC_SNVs.tsv" # Path to mutations file
+trinuc_bgcount_path: "data/trinuc_bgfreq_gene_cds.tsv" # Path to file with background trinucleotide counts
+expression_path: "data/TCGA_mean_expression.tsv" # Path to file with mean expression data for each gene. Only relevant when using this type of scaling in recurrence-based methods.
+repl_timing_path: "data/replication_timing.bed" # Path to file with replication timing. Only relevant when using this type of scaling in recurrence-based methods.
+test_regions_path: "data/gene_cds.tsv" # Path to file with region definitions.
+test_region_name: "gene" # Name of the type of region being analysed (same as that column in the mutations file)
+
+out_dir: "demo/output/" # Output directory. Trailing slash.
+out_base_name: "SEISMIC_result" # Output file name will start with this.
+
+seq_type: "WXS" # WXS/WGS for mutation data
+sig_type: "cohort" # cohort for WXS, patient/cohort for WGS
+cancer_type: "UCEC" # Name of cancer type
+effects_to_keep: # Include mutations with these effects in analysis. The effects in CDS regions are m/n/s (missense/nonsense/silent), and na (not applicable) in promoters.
+  - "m"
+  - "n"
+
+# WXS-specific scaling
+# The scaling options have no impact when not running tests with recurrence, as the cohort distribution method ignores recurrence.
+scale_exp_to_repl_reg: FALSE # TRUE/FALSE. Scale mutation expectations using replication timing data.
+scale_exp_to_expr_reg: FALSE # TRUE/FALSE. Scale mutation expectations using expression data.
+min_test_region_length_for_regression: 5000 # Minimum length of a gene to perform scaling with replication timing or expression data.
+
+
+# WGS-specific scaling
+# The scaling options have no impact when not running tests with recurrence, as the cohort distribution method ignores recurrence.
+scale_exp_with_silent_muts: FALSE # TRUE/FALSE. Scale mutation expectations based on the number of silent mutations and mutations around the analysed region.
+silent_mut_flank_upstream: 10000 # Include this number of bases upstream for this scaling option.
+silent_mut_flank_downstream: 10000 # Include this number of bases downstream for this scaling option.
+min_silent_mutations: 10 # Require at least this number of silent mutations to perform scaling with silent mutations.
+
+# Which tests to perform. The scaling methods above are only relevant when running recurrence-based methods (recurrence or combined)
+test_cohort_distribution_alone: TRUE # TRUE/FALSE. Run cohort distribution test. This is the main method in SEISMIC, described in the paper.
+test_recurrence_alone: FALSE # TRUE/FALSE. Run test based on recurrence.
+test_combined_model: FALSE # TRUE/FALSE. Run test that evaluates both recurrence and cohort distribution.
+
+# Filtering test regions
+remove_overlapping_test_regions: FALSE # TRUE/FALSE. Removes genes that overlap each other at all if set to TRUE.
+min_mutations: 3 # Require mutations in at least this number of tumours in a gene to analyse it.
+
+no_of_simulations: 10000 # Number of cohorts to simulate
+cores: 1 # Number of threads to use. Set higher if there is enough RAM (approximately 5-10 GB used per thread)
