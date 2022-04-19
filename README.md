@@ -1,6 +1,8 @@
 <img src="media/SEISMIC_logo.png" width="300" /> <!-- Change this to a raw.github link after making the repo public to avoid broken links if the README is hosted without the logo file in places other than GitHub. -->
 
-SEISMIC identifies genomic regions where mutations are positively selected in cancer genomes, by analysing the distribution of mutations across the cohort.
+## Selection Evidence Inferred from Sample-specific Modelling In Cancer
+
+SEISMIC identifies genomic regions where mutations are positively selected in cancer genomes, by analysing the distribution of mutations across a tumour cohort.
 
 ## System Requirements
 
@@ -32,6 +34,8 @@ The demo script first generates the required mutation effect annotation file (\~
 
 ## Usage
 
+SEISMIC is run from the command line, with a yaml config file as input argument.
+
 ```bash
 Rscript SEISMIC.R config.yaml
 ```
@@ -57,7 +61,7 @@ Mutations (SNVs) currently need to be pyrimidine-focused with tab-separated valu
 - `varnuc`: variant nucleotide
 - `sampleID`: patient ID
 
-A file with background trinucleotide frequencies in the regions covered by the mutations is required. Files suitable for whole-exome and whole-genome mutations are available in the data directory.
+A file with background trinucleotide frequencies (both strands) in the part of the genome covered by the mutations is required. Files suitable for whole-exome and whole-genome mutations are available in the data directory.
 
 A file with region definitions for the regions to be analysed is required. The files used for gene CDSs, promoters, and introns in the paper are available in the data directory.
 
