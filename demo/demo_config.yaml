@@ -1,5 +1,7 @@
 mut_effects_path: "data/gene_cds_tiled_mut_effect.tsv.gz"
 mutations_path: "demo/TCGA_UCEC_SNVs.tsv"
+# maf_patient_column_name: "Tumor_Sample_Barcode"
+# maf_cancer_column_name:
 trinuc_bgcount_path: "data/trinuc_bgfreq_gene_cds.tsv"
 # expression_path: "data/TCGA_mean_expression.tsv"
 # repl_timing_path: "data/replication_timing.bed"

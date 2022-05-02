@@ -29,7 +29,14 @@ main <- function(){
   system(paste("mkdir -p", config$out_dir))
   
   cat("Loading mutations, mutation effects, and regions\n")
-  all_mutations.gr <- read_mutations_from_tsv(config$mutations_path, config$cancer_type)
+  # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
+  all_mutations.gr <- do.call(read_mutations,
+          list(path = config$mutations_path,
+               cancer_type = config$cancer_type) %>%
+            {if(!is.null('config$maf_cancer_column_name')){c(., cancer_colname = config$maf_cancer_column_name)} else .} %>%
+            {if(!is.null('config$maf_patient_column_name')){c(., patient_colname = config$maf_patient_column_name)} else .}
+  )
+  
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
@@ -504,19 +511,72 @@ main <- function(){
 # Read/write files
 ################################################
 
-# Read mutations from sqlite database file
+
+# Read SNVs from MAF file. If there is a cancer type column (name specified in cancer_colname), filter the mutations to only the ones matching the cancer types in config.
+# If there is no cancer type column, make one and set it to the cancer type in config (just to be compatible with other parts of the script).
+read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
+  patient_colname <- tolower(patient_colname)
+  cancer_colname <- tolower(cancer_colname)
+  bases <- c('C', 'A', 'G', 'T')
+  pyrimidines <- c('C', 'T')
+  df <- data.table::fread(path) %>% 
+    as_tibble() %>% 
+    rename_all(tolower) # PCAWG file doesn't follow the format conventions (e.g., End_position instead of End_Position), so let's just lc everything.
+  
+  if(!(patient_colname %in% colnames(df))){
+    cat('patient column name not found in .maf file. Incorrectly spelled in the config file?\n')
+    quit()
+  }
+  if(cancer_colname != 'cancer_colname_not_available' & !(cancer_colname %in% colnames(df))){
+    cat('cancer column name not found in .maf file. Incorrectly spelled in the config file?\n')
+    quit()
+  }
+  
+  df %>% 
+    { if( length(cancer_type) == 1 & !(cancer_colname %in% names(.)) ) mutate(., cancer = cancer_type) else if( cancer_colname %in% names(.) ) dplyr::rename(., cancer = (!!sym(cancer_colname)))} %>% # Cancer type column handling - add if missing.
+    { if( length(cancer_type) == 1 & cancer_type[1] == 'pancancer' ) . else filter(., cancer %in% cancer_type) } %>% # Cancer type filtration
+    filter(variant_type == 'SNP') %>% 
+    mutate(varnuc = ifelse(reference_allele != tumor_seq_allele1, tumor_seq_allele1, tumor_seq_allele2)) %>% 
+    dplyr::rename(seqnames = chromosome, start = start_position, end = end_position, refnuc = reference_allele, sampleID = (!!sym(patient_colname))) %>% 
+    select(seqnames, start, end, strand, refnuc, varnuc, sampleID, cancer) %>% 
+    mutate(seqnames = ifelse(!str_detect(seqnames, '^chr'), paste0('chr', seqnames), seqnames)) %>% 
+    mutate(strand = ifelse(as.character(strand) == '1', '+', strand),
+           strand = ifelse(as.character(strand) == '-1', '-', strand),
+           strand = ifelse(refnuc %in% pyrimidines, strand, chartr('+-', '-+', strand))) %>% 
+    mutate(refnuc = ifelse(strand == '+', refnuc, str_revcomp(refnuc)),
+           varnuc = ifelse(strand == '+', varnuc, str_revcomp(varnuc))) %>% 
+    as_granges() %>% 
+    mutate(trinuc = getSeq(BSgenome.Hsapiens.UCSC.hg19, . + 1) %>% as.character()) %>% 
+    select(cancer, sampleID, varnuc, trinuc)
+}
+
+# Read mutations from .tsv file
 # filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
-read_mutations_from_db <- function(path, table_name, cancer_type){
-  mydb <- dbConnect(RSQLite::SQLite(), path)
-  gr <- tbl(mydb, table_name) %>% 
-    { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>% 
-    # filter(cancer == cancer_type) %>%
-    collect() %>% 
+read_mutations_from_tsv <- function(mutations_path, cancer_type){
+  read_tsv(mutations_path, col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
+    # filter(cancer == cancer_type) %>% 
+    { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
     as_granges() %>%
     select(cancer, sampleID, varnuc, trinuc)
-  dbDisconnect(mydb)
-  return(gr)
 }
+
+# Used to check if the mutation file is our legacy format
+is_legacy_mutation_format <- function(path, cancer_type){
+  columns <- fread(path, nrows = 0) %>% colnames()
+  all(c("seqnames", "start", "end", "strand", "cancer", "gene", "trinuc", "refnuc", "varnuc", "sampleID") %in% columns)
+}
+
+# Read mutations with read_mutations_from_tsv if the mutation file is in our legacy format. Otherwise, assume MAF.
+read_mutations <- function(path, cancer_type, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
+  if(is_legacy_mutation_format(path)){
+    mutations <- read_mutations_from_tsv(path, cancer_type)
+  } else {
+    mutations <- read_mutations_from_maf(path, cancer_type, patient_colname, cancer_colname)
+  }
+  return(mutations)
+}
+
+
 
 # Read mut_effects for a certain test_region (e.g. gene) from sqlite database file
 # Used so as to not have to keep too much data in memory
@@ -536,15 +596,6 @@ write_df_to_db <- function(df, path, table_name){
   dbDisconnect(mydb)
 }
 
-# Read mutations from .tsv file
-# filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
-read_mutations_from_tsv <- function(mutations_path, cancer_type){
-  read_tsv(mutations_path, col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
-    # filter(cancer == cancer_type) %>% 
-    { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
-    as_granges() %>%
-    select(cancer, sampleID, varnuc, trinuc)
-}
 
 
 

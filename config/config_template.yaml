@@ -1,5 +1,7 @@
 mut_effects_path: "data/gene_cds_tiled_mut_effect.tsv.gz" # Path to mutation effect file
-mutations_path: "demo/TCGA_UCEC_SNVs.tsv" # Path to mutations file
+mutations_path: "demo/TCGA_UCEC_SNVs.tsv" # Path to mutations file (.maf or custom .tsv)
+# maf_patient_column_name: "Tumor_Sample_Barcode" # Name of column with patient IDs in MAF file
+# maf_cancer_column_name: # Name of column with cancer type in MAF file, if applicable (only required for MAF files with multiple cancer types)
 trinuc_bgcount_path: "data/trinuc_bgfreq_gene_cds.tsv" # Path to file with background trinucleotide counts
 expression_path: "data/TCGA_mean_expression.tsv" # Path to file with mean expression data for each gene. Only relevant when using this type of scaling in recurrence-based methods.
 repl_timing_path: "data/replication_timing.bed" # Path to file with replication timing. Only relevant when using this type of scaling in recurrence-based methods.
