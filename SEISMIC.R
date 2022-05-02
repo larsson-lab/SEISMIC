@@ -5,9 +5,6 @@ suppressPackageStartupMessages(library(yaml))
 suppressPackageStartupMessages(library(data.table))
 suppressPackageStartupMessages(library(foreach))
 suppressPackageStartupMessages(library(doParallel))
-# suppressPackageStartupMessages(library(DBI))
-# suppressPackageStartupMessages(library(dbplyr))
-suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg19))
 suppressPackageStartupMessages(library(stringi))
 suppressPackageStartupMessages(library(inline))
 suppressPackageStartupMessages(library(Rcpp))
@@ -25,6 +22,8 @@ main <- function(){
   if(length(args) > 2){
     config$cancer_type <- args[3]
   }
+  
+  genome <- load_bsgenome(config$reference_genome)
   
   system(paste("mkdir -p", config$out_dir))
   
@@ -546,7 +545,7 @@ read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_
     mutate(refnuc = ifelse(strand == '+', refnuc, str_revcomp(refnuc)),
            varnuc = ifelse(strand == '+', varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>% 
-    mutate(trinuc = getSeq(BSgenome.Hsapiens.UCSC.hg19, . + 1) %>% as.character()) %>% 
+    mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
 
@@ -852,7 +851,7 @@ count_silent_mut_positions <- function(mut_effects.df, test_regions.gr, flank_up
   
   # For each gene, count the number of trinucleotides in introns + gene flanks.
   # Use that count for each possible varnuc, as every SNV in an intron counts as silent
-  intron_trinuc_count.df <- getSeq(BSgenome.Hsapiens.UCSC.hg19, silent_regions.gr) %>% 
+  intron_trinuc_count.df <- getSeq(genome, silent_regions.gr) %>% 
     trinucleotideFrequency() %>% 
     as_tibble() %>% 
     mutate(test_region = silent_regions.gr$test_region) %>%
@@ -1119,7 +1118,19 @@ make_fake_paste_column_chrom <- function(gr, column_name, sep = "_"){
     as_granges()
 }
 
-
+# Function to load BSgenome package and return the object
+load_bsgenome <- function(assembly){
+  if(assembly %in% c('hg19', 'GRCh37')){
+    suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg19))
+    return(BSgenome.Hsapiens.UCSC.hg19)
+  } else if(assembly %in% c('hg38', 'GRCh38')){
+    suppressPackageStartupMessages(library(BSgenome.Hsapiens.UCSC.hg38))
+    return(BSgenome.Hsapiens.UCSC.hg38)
+  } else {
+    cat('Invalid reference genome. Specify either hg19 or hg38 in config file.\n')
+    quit()
+  }
+}
 
 
 ################################################

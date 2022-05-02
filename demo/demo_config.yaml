@@ -11,6 +11,7 @@ test_region_name: "gene"
 out_dir: "demo/output/"
 out_base_name: "SEISMIC_demo_UCEC_WXS_result_"
 
+reference_genome: "hg19"
 seq_type: "WXS"
 sig_type: "cohort"
 cancer_type: "UCEC"

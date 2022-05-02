@@ -11,6 +11,7 @@ test_region_name: "gene" # Name of the type of region being analysed (same as th
 out_dir: "demo/output/" # Output directory. Trailing slash.
 out_base_name: "SEISMIC_result" # Output file name will start with this.
 
+reference_genome: "hg19" # Genome assembly for the mutations, test_regions, and mut_effects - either hg19 or hg38 (GRCh37 and GRCh38 are also valid)
 seq_type: "WXS" # WXS/WGS for mutation data
 sig_type: "cohort" # cohort for WXS, patient/cohort for WGS
 cancer_type: "UCEC" # Name of cancer type
