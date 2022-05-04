@@ -536,14 +536,14 @@ read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_
     { if( length(cancer_type) == 1 & cancer_type[1] == 'pancancer' ) . else filter(., cancer %in% cancer_type) } %>% # Cancer type filtration
     filter(variant_type == 'SNP') %>% 
     mutate(varnuc = ifelse(reference_allele != tumor_seq_allele1, tumor_seq_allele1, tumor_seq_allele2)) %>% 
-    dplyr::rename(seqnames = chromosome, start = start_position, end = end_position, refnuc = reference_allele, sampleID = (!!sym(patient_colname))) %>% 
-    select(seqnames, start, end, strand, refnuc, varnuc, sampleID, cancer) %>% 
+    dplyr::rename(seqnames = chromosome, start = start_position, end = end_position, old_strand = strand, refnuc = reference_allele, sampleID = (!!sym(patient_colname))) %>% 
+    select(seqnames, start, end, old_strand, refnuc, varnuc, sampleID, cancer) %>% 
     mutate(seqnames = ifelse(!str_detect(seqnames, '^chr'), paste0('chr', seqnames), seqnames)) %>% 
-    mutate(strand = ifelse(as.character(strand) == '1', '+', strand),
-           strand = ifelse(as.character(strand) == '-1', '-', strand),
-           strand = ifelse(refnuc %in% pyrimidines, strand, chartr('+-', '-+', strand))) %>% 
-    mutate(refnuc = ifelse(strand == '+', refnuc, str_revcomp(refnuc)),
-           varnuc = ifelse(strand == '+', varnuc, str_revcomp(varnuc))) %>% 
+    mutate(old_strand = ifelse(as.character(old_strand) == '1', '+', old_strand),
+           old_strand = ifelse(as.character(old_strand) == '-1', '-', old_strand),
+           strand = ifelse(refnuc %in% pyrimidines, old_strand, chartr('+-', '-+', old_strand))) %>% 
+    mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
+           varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>% 
     mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
     select(cancer, sampleID, varnuc, trinuc)
@@ -552,9 +552,16 @@ read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_
 # Read mutations from .tsv file
 # filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
 read_mutations_from_tsv <- function(mutations_path, cancer_type){
+  pyrimidines <- c('C', 'T')
+  bases <- c('C', 'A', 'G', 'T')
   read_tsv(mutations_path, col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
     # filter(cancer == cancer_type) %>% 
     { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
+    dplyr::rename(old_strand = strand) %>% 
+    filter(refnuc %in% bases, varnuc %in% bases) %>% 
+    mutate(strand = ifelse(refnuc %in% pyrimidines, old_strand, chartr('+-', '-+', old_strand))) %>% 
+    mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
+           varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>%
     select(cancer, sampleID, varnuc, trinuc)
 }
