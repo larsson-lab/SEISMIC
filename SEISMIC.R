@@ -563,6 +563,7 @@ read_mutations_from_tsv <- function(mutations_path, cancer_type){
     mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
            varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>%
+    mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
 
