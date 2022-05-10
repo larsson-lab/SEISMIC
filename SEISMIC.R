@@ -554,7 +554,7 @@ read_mutations_from_tsv <- function(mutations_path, genome, cancer_type){
 # Used to check if the mutation file is our legacy format
 is_legacy_mutation_format <- function(path, cancer_type){
   columns <- fread(path, nrows = 0) %>% colnames()
-  all(c("seqnames", "start", "end", "strand", "cancer", "gene", "trinuc", "refnuc", "varnuc", "sampleID") %in% columns)
+  all(c("seqnames", "start", "end", "strand", "cancer", "refnuc", "varnuc", "sampleID") %in% columns)
 }
 
 # Read mutations with read_mutations_from_tsv if the mutation file is in our legacy format. Otherwise, assume MAF.

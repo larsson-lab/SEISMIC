@@ -17,7 +17,7 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 - `fitdistrplus` (1.1.8)
 - `data`.table (1.14.2)
 - `plyranges` (1.14.0)
-- `BSgenome.Hsapiens.UCSC.hg19` (1.4.3)
+- `BSgenome.Hsapiens.UCSC.hg19` (1.4.3) and/or `BSgenome.Hsapiens.UCSC.hg38` (1.4.4)
 
 
 ## Installation
@@ -55,7 +55,6 @@ Mutations (hg19 or hg38 coordinates) can either be in MAF format, or tab-separat
 - `end`: 1-based position of mutation
 - `strand`: strand of the refnuc/varnuc 
 - `cancer`: cancer type. Multiple cancer types in one file will filter to the specified cancer type.
-- `gene`: gene name
 - `refnuc`: reference nucleotide
 - `varnuc`: variant nucleotide
 - `sampleID`: patient ID
