@@ -42,3 +42,4 @@ vignettes/*.pdf
 data/gene_cds_tiled_mut_effect.tsv.gz
 demo/output
 data/gene_promoters_500bp_tiled_mut_effect.tsv.gz
+data/*annotated_regions*
