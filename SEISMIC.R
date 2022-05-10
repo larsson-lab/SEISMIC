@@ -49,26 +49,14 @@ main <- function(){
   # Filter to remove undesired regions later
   test_region_list <- test_regions.gr$test_region %>% unique()
   
-  # If annotate_cds_effects is TRUE, annotate test_regions and mutations m/s/n, and filter by effects_to_keep
-  # If annotate_cds_effects is FALSE, annotate test_regions and mutations na, and keep all mutations, regardless of what effects_to_keep is set to.
-  if(config$annotate_cds_effects){
-    cat("Annotating regions with mutation effects\n")
-  } else {
-    cat("Annotating regions without mutation effects\n")
-    config$effects_to_keep <- 'na'
-  }
-  codon_table.df <- make_codon_table()
-  max_cores <- detectCores() # Consider making it possible to run on less than all cores.
-  mut_effects.df <- do.call(bind_rows, mclapply(test_region_list, function(x) annotate_mut_effects(test_regions.gr, x, codon_table.df, config$annotate_cds_effects), mc.cores = max_cores))
+  # Load region annotations, or annotate if there is no pre-existing file.
+  mut_effects.df <- get_mut_effects(test_regions.gr, config$test_regions_path, config$annotate_cds_effects)
+  
   cat("Annotating mutations\n")
   effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
     filter_mutation_effect_keep(config$effects_to_keep)
-
-  
   
   cat("Calculating mutational frequencies\n")
-  
-  
   if(config$sig_type == "patient"){
     if(config$seq_type == "WXS"){
       cat("Patient-specific signatures not available for WXS sequencing data. Change sig_type accordingly\n")
@@ -605,6 +593,50 @@ write_df_to_db <- function(df, path, table_name){
 ################################################
 # Mutation annotation and effect filtering
 ################################################
+
+save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_path){
+  cat("Saving annotated regions, to speed up next SEISMIC is run with this region file\n")
+  tryCatch({
+    saveRDS(mut_effects.df, rds_path)
+    system(paste('cd', dirname(test_region_path),'; md5sum', basename(test_region_path), basename(rds_path), '>', basename(md5_path)))
+  }, 
+  error = function(e) cat("Couldn't save annotated regions - Annotation will have to be done again next run\n"))
+}
+
+
+get_mut_effects <- function(test_regions.gr, test_region_path, annotate_cds_effects){
+  new_name <- paste0(test_region_path, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''))
+  rds_path <- paste0(new_name, '.rds')
+  md5_path <- paste0(new_name, '.md5')
+  if(all(file.exists(test_region_path, rds_path, md5_path))){
+    tryCatch(command_status <- system(paste('cd', dirname(test_region_path), '; md5sum -c --status', basename(md5_path))),
+             error = function(e) NULL)
+    load_mut_effects <- command_status == 0
+  } else {
+    load_mut_effects <- FALSE
+  }
+  
+  if(load_mut_effects){
+    cat("Loading previously annotated regions\n")
+    mut_effects.df <- readRDS(rds_path)
+  } else {
+    # If annotate_cds_effects is TRUE, annotate test_regions and mutations m/s/n, and filter by effects_to_keep
+    # If annotate_cds_effects is FALSE, annotate test_regions and mutations na, and keep all mutations, regardless of what effects_to_keep is set to.
+    if(annotate_cds_effects){
+      cat("Annotating regions with mutation effects\n")
+    } else {
+      cat("Annotating regions without mutation effects\n")
+      config$effects_to_keep <- 'na'
+    }
+    codon_table.df <- make_codon_table()
+    max_cores <- detectCores() # Consider making it possible to run on less than all cores.
+    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, codon_table.df, annotate_cds_effects), mc.cores = max_cores))
+    
+    save_mut_effects(mut_effects.df, test_region_path, rds_path, md5_path)
+  }
+  
+  return(mut_effects.df)
+}
 
 annotate_mut_effects <- function(cds.gr, gene_val, codon_table.df, annotate_cds_effects){
   pyr <- c("C", "T")
