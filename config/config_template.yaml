@@ -15,7 +15,9 @@ reference_genome: "hg19" # Genome assembly for the mutations, test_regions, and 
 seq_type: "WXS" # WXS/WGS for mutation data
 sig_type: "cohort" # cohort for WXS, patient/cohort for WGS
 cancer_type: "UCEC" # Name of cancer type
-effects_to_keep: # Include mutations with these effects in analysis. The effects in CDS regions are m/n/s (missense/nonsense/silent), and na (not applicable) in promoters.
+
+annotate_cds_effects: TRUE # If tested regions are CDSs, set TRUE to compute mutation effects (missense/nonsense/synonymous), in order to analyse only nonsynonymous, for instance. If FALSE, treats all mutations the same.
+effects_to_keep: # Include mutations with these effects in analysis. Only used if annotate_cds_effects is TRUE. The effects in CDS regions are m/n/s (missense/nonsense/synonymous).
   - "m"
   - "n"
 

@@ -44,32 +44,27 @@ main <- function(){
     rename_test_region(config$test_region_name) %>% 
     as_granges()
   
-  # Load mutation effects for every position in test_regions.gr
-  col_types <- c(list(seqnames = col_character(),
-                      start = col_integer(),
-                      end = col_integer(),
-                      strand = col_character(),
-                      refnuc = col_character(),
-                      ref_trinuc = col_character(),
-                      base_no = col_integer(),
-                      codon_no = col_integer(),
-                      C = col_character(),
-                      A = col_character(),
-                      G = col_character(),
-                      T = col_character()),
-                 eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
-  mut_effects.df <- read_tsv(config$mut_effects_path, col_types = do.call(cols, col_types)) %>% # This is typically large. Will it take more space than necessary in parallel foreach loop?
-    rename_test_region(config$test_region_name)
-  
+
   # Start a list of test regions (typically genes) with everything that might be analysed based on every region that has annotations
   # Filter to remove undesired regions later
-  test_region_list <- mut_effects.df$test_region %>% unique()
+  test_region_list <- test_regions.gr$test_region %>% unique()
   
+  # If annotate_cds_effects is TRUE, annotate test_regions and mutations m/s/n, and filter by effects_to_keep
+  # If annotate_cds_effects is FALSE, annotate test_regions and mutations na, and keep all mutations, regardless of what effects_to_keep is set to.
+  if(config$annotate_cds_effects){
+    cat("Annotating regions with mutation effects\n")
+  } else {
+    cat("Annotating regions without mutation effects\n")
+    config$effects_to_keep <- 'na'
+  }
+  codon_table.df <- make_codon_table()
+  max_cores <- detectCores() # Consider making it possible to run on less than all cores.
+  mut_effects.df <- do.call(bind_rows, mclapply(test_region_list, function(x) annotate_mut_effects(test_regions.gr, x, codon_table.df, config$annotate_cds_effects), mc.cores = max_cores))
   cat("Annotating mutations\n")
-  # Annotate mutations with effect and test_region. Keep only those that are in mut_effects.df,
-  # and with effects in config$effects_to keep (e.g. non-silent mutations)
-  effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>% 
+  effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
     filter_mutation_effect_keep(config$effects_to_keep)
+
+  
   
   cat("Calculating mutational frequencies\n")
   
@@ -611,6 +606,79 @@ write_df_to_db <- function(df, path, table_name){
 # Mutation annotation and effect filtering
 ################################################
 
+annotate_mut_effects <- function(cds.gr, gene_val, codon_table.df, annotate_cds_effects){
+  pyr <- c("C", "T")
+  # Tile into 1 bp segments and get sequence. Enumerate codons and bases
+  tiled_cds.df <- cds.gr %>%
+    filter(test_region == gene_val) %>% 
+    tile_ranges(1) %>%
+    select(-partition) %>%
+    mutate(ref_trinuc = getSeq(genome, . + 1),
+           refnuc = str_sub(ref_trinuc, 2, 2)) %>%
+    as_tibble() %>% 
+    mutate(base_no = ifelse(strand == "+", row_number(), -(row_number() - dplyr::n() - 1)),
+           codon_no = ceiling(base_no / 3))
+
+  if(annotate_cds_effects){
+    region_strand <- unique(tiled_cds.df$strand) %>% as.character()
+    region_seq <- ifelse(region_strand == "+", paste0(tiled_cds.df$refnuc, collapse = ""), reverse(paste0(tiled_cds.df$refnuc, collapse = "")))
+    
+    # Annotate each possible mutation at each base with effect
+    gene_codons.df <- tibble(codon = strsplit(region_seq, "(?<=.{3})", perl = TRUE)[[1]]) %>% 
+      mutate(codon_no = row_number()) %>% 
+      dplyr::slice(rep(1:dplyr::n(), each = 12)) %>% 
+      mutate(codon_base_no = rep(1:3, dplyr::n()/12, each = 4)) %>% 
+      mutate(mut_to = rep(c("A", "C", "G", "T"), dplyr::n()/4)) %>% 
+      mutate(codon1 = substr(codon, 1, codon_base_no - 1),
+             codon2 = substr(codon, codon_base_no + 1, 3)) %>% 
+      mutate(mut_codon = paste0(codon1, mut_to, codon2)) %>% 
+      select(-codon1, -codon2) %>% 
+      left_join(codon_table.df, by = 'codon') %>% 
+      left_join(codon_table.df %>% dplyr::rename(mut_codon = codon, mut_aa = aa), by = 'mut_codon') %>% 
+      mutate(effect = case_when(codon == mut_codon ~ "u", aa == mut_aa ~ "s", mut_aa == "STOP" ~ "n", TRUE ~ "m"))
+    # u - unmutated
+    # s - synonymous
+    # n - nonsense
+    # m - missense
+    
+    # Sorting mutation effects and pivoting wider to be able to bind_cols to tiled_cds.df
+    # Making pyrimidine-focused
+    gr_sorted_effects.df <-
+      gene_codons.df %>%
+      mutate(refnuc = substr(codon, codon_base_no, codon_base_no)) %>%
+      mutate(strand_switch = ifelse(refnuc %in% pyr, FALSE, TRUE)) %>%
+      mutate(mut_to = ifelse(strand_switch, str_revcomp(mut_to), mut_to),
+             refnuc = ifelse(strand_switch, str_revcomp(refnuc), refnuc)) %>%
+      select(codon_no, codon_base_no, mut_to, effect, strand_switch) %>%
+      pivot_wider(names_from = mut_to, values_from = effect) %>% 
+      mutate(strand = region_strand) %>% 
+      mutate(plus_strand_codon_order = ifelse(strand == "+", codon_no, -(codon_no - dplyr::n()/3 - 1)),
+             plus_strand_codon_base_order = ifelse(strand == "+", codon_base_no, -(codon_base_no - 4))) %>% 
+      arrange(plus_strand_codon_order, plus_strand_codon_base_order)
+    
+    # Adding mutation effects to tiled cds
+    tiled_cds.df %>%
+      ungroup() %>%
+      bind_cols(gr_sorted_effects.df %>% select(C,A,G,T, strand_switch)) %>%
+      mutate(strand = ifelse(strand_switch, chartr("+-", "-+", as.character(strand)), as.character(strand)),
+             refnuc = ifelse(strand_switch, str_revcomp(refnuc), refnuc),
+             ref_trinuc = ifelse(strand_switch, str_revcomp(ref_trinuc), ref_trinuc),
+             test_region = gene_val) %>% 
+      select(-width, -strand_switch)
+  } else {
+    tiled_cds.df %>% mutate(strand_switch = ifelse(refnuc %in% pyr, FALSE, TRUE),
+                            strand = ifelse(strand_switch, chartr("+-", "-+", as.character(strand)), as.character(strand)),
+                            refnuc = ifelse(strand_switch, str_revcomp(refnuc), refnuc),
+                            ref_trinuc = ifelse(strand_switch, str_revcomp(ref_trinuc), ref_trinuc),
+                            C = 'na',
+                            A = 'na',
+                            G = 'na',
+                            T = 'na',
+                            test_region = gene_val) %>%
+      select(-width, -strand_switch)
+  }
+}
+
 # Annotate mutations in mut_effects regions
 annotate_mutations <- function(mutations.gr, mut_effects.df){
   mutations.gr %>%
@@ -633,8 +701,73 @@ filter_mutation_effect_remove <- function(mutations_with_effects.gr, effects){
   filter(mutations_with_effects.gr, !(effect %in% effects))
 }
 
-
-
+make_codon_table <- function(){
+  tribble(~aa, ~codon,
+          'G', 'GGG',
+          'G', 'GGA',
+          'G', 'GGT',
+          'G', 'GGC',
+          'E', 'GAG',
+          'E', 'GAA',
+          'D', 'GAT',
+          'D', 'GAC',
+          'V', 'GTG',
+          'V', 'GTA',
+          'V', 'GTT',
+          'V', 'GTC',
+          'A', 'GCG',
+          'A', 'GCA',
+          'A', 'GCT',
+          'A', 'GCC',
+          'R', 'AGG',
+          'R', 'AGA',
+          'S', 'AGT',
+          'S', 'AGC',
+          'K', 'AAG',
+          'K', 'AAA',
+          'N', 'AAT',
+          'N', 'AAC',
+          'M', 'ATG',
+          'I', 'ATA',
+          'I', 'ATT',
+          'I', 'ATC',
+          'T', 'ACG',
+          'T', 'ACA',
+          'T', 'ACT',
+          'T', 'ACC',
+          'W', 'TGG',
+          'STOP', 'TGA',
+          'C', 'TGT',
+          'C', 'TGC',
+          'STOP', 'TAG',
+          'STOP', 'TAA',
+          'Y', 'TAT',
+          'Y', 'TAC',
+          'L', 'TTG',
+          'L', 'TTA',
+          'F', 'TTT',
+          'F', 'TTC',
+          'S', 'TCG',
+          'S', 'TCA',
+          'S', 'TCT',
+          'S', 'TCC',
+          'R', 'CGG',
+          'R', 'CGA',
+          'R', 'CGT',
+          'R', 'CGC',
+          'Q', 'CAG',
+          'Q', 'CAA',
+          'H', 'CAT',
+          'H', 'CAC',
+          'L', 'CTG',
+          'L', 'CTA',
+          'L', 'CTT',
+          'L', 'CTC',
+          'P', 'CCG',
+          'P', 'CCA',
+          'P', 'CCT',
+          'P', 'CCC')
+}
 
 ################################################
 # Mutation frequencies
