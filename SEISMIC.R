@@ -1,3 +1,5 @@
+#!/usr/bin/env Rscript
+
 suppressPackageStartupMessages(library(fitdistrplus))
 suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(plyranges))
@@ -544,7 +546,7 @@ read_mutations_from_tsv <- function(mutations_path, genome, cancer_type){
     mutate(strand = ifelse(refnuc %in% pyrimidines, old_strand, chartr('+-', '-+', old_strand))) %>% 
     mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
            varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
-    as_granges %>%
+    as_granges() %>%
     mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
@@ -594,7 +596,7 @@ write_df_to_db <- function(df, path, table_name){
 ################################################
 
 save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_path){
-  cat("Saving annotated regions, to speed up next SEISMIC is run with this region file\n")
+  cat("Saving annotated regions, to speed up next SEISMIC run with this region file\n")
   tryCatch({
     saveRDS(mut_effects.df, rds_path)
     system(paste('cd', dirname(test_region_path),'; md5sum', basename(test_region_path), basename(rds_path), '>', basename(md5_path)))
