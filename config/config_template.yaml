@@ -1,4 +1,3 @@
-mut_effects_path: "data/gene_cds_tiled_mut_effect.tsv.gz" # Path to mutation effect file
 mutations_path: "demo/TCGA_UCEC_SNVs.tsv" # Path to mutations file (.maf or custom .tsv)
 # maf_patient_column_name: "Tumor_Sample_Barcode" # Name of column with patient IDs in MAF file
 # maf_cancer_column_name: # Name of column with cancer type in MAF file, if applicable (only required for MAF files with multiple cancer types)
