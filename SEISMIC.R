@@ -24,14 +24,14 @@ main <- function(){
   }
   
   genome <- load_bsgenome(config$reference_genome)
-  
   system(paste("mkdir -p", config$out_dir))
   
   cat("Loading mutations, mutation effects, and regions\n")
   # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
   all_mutations.gr <- do.call(read_mutations,
           list(path = config$mutations_path,
-               cancer_type = config$cancer_type) %>%
+               cancer_type = config$cancer_type,
+               genome = genome) %>%
             {if(!is.null('config$maf_cancer_column_name')){c(., cancer_colname = config$maf_cancer_column_name)} else .} %>%
             {if(!is.null('config$maf_patient_column_name')){c(., patient_colname = config$maf_patient_column_name)} else .}
   )
@@ -50,7 +50,7 @@ main <- function(){
   test_region_list <- test_regions.gr$test_region %>% unique()
   
   # Load region annotations, or annotate if there is no pre-existing file.
-  mut_effects.df <- get_mut_effects(test_regions.gr, config$test_regions_path, config$annotate_cds_effects)
+  mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$test_regions_path, config$annotate_cds_effects)
   
   cat("Annotating mutations\n")
   effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
@@ -496,7 +496,7 @@ main <- function(){
 
 # Read SNVs from MAF file. If there is a cancer type column (name specified in cancer_colname), filter the mutations to only the ones matching the cancer types in config.
 # If there is no cancer type column, make one and set it to the cancer type in config (just to be compatible with other parts of the script).
-read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
+read_mutations_from_maf <- function(path, genome, cancer_type, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
   patient_colname <- tolower(patient_colname)
   cancer_colname <- tolower(cancer_colname)
   bases <- c('C', 'A', 'G', 'T')
@@ -534,18 +534,17 @@ read_mutations_from_maf <- function(path, cancer_type, patient_colname = 'Tumor_
 
 # Read mutations from .tsv file
 # filter for correct cancer type, and return GRanges with sampleID, varnuc, and trinuc
-read_mutations_from_tsv <- function(mutations_path, cancer_type){
+read_mutations_from_tsv <- function(mutations_path, genome, cancer_type){
   pyrimidines <- c('C', 'T')
   bases <- c('C', 'A', 'G', 'T')
   read_tsv(mutations_path, col_types = cols(refnuc = col_character(), varnuc = col_character())) %>% # Specifying col_type for ref/varnuc to avoid T being interpreted as TRUE
-    # filter(cancer == cancer_type) %>% 
     { if(length(cancer_type) == 1 & cancer_type[1] == 'pancancer') . else filter(., cancer %in% cancer_type) } %>%
     dplyr::rename(old_strand = strand) %>% 
     filter(refnuc %in% bases, varnuc %in% bases) %>% 
     mutate(strand = ifelse(refnuc %in% pyrimidines, old_strand, chartr('+-', '-+', old_strand))) %>% 
     mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
            varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
-    as_granges() %>%
+    as_granges %>%
     mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
@@ -557,11 +556,11 @@ is_legacy_mutation_format <- function(path, cancer_type){
 }
 
 # Read mutations with read_mutations_from_tsv if the mutation file is in our legacy format. Otherwise, assume MAF.
-read_mutations <- function(path, cancer_type, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
+read_mutations <- function(path, cancer_type, genome, patient_colname = 'Tumor_Sample_Barcode',  cancer_colname = 'cancer_colname_not_available'){
   if(is_legacy_mutation_format(path)){
-    mutations <- read_mutations_from_tsv(path, cancer_type)
+    mutations <- read_mutations_from_tsv(path, genome, cancer_type)
   } else {
-    mutations <- read_mutations_from_maf(path, cancer_type, patient_colname, cancer_colname)
+    mutations <- read_mutations_from_maf(path, genome, cancer_type, patient_colname, cancer_colname)
   }
   return(mutations)
 }
@@ -600,11 +599,11 @@ save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_pat
     saveRDS(mut_effects.df, rds_path)
     system(paste('cd', dirname(test_region_path),'; md5sum', basename(test_region_path), basename(rds_path), '>', basename(md5_path)))
   }, 
-  error = function(e) cat("Couldn't save annotated regions - Annotation will have to be done again next run\n"))
+  error = function(e) cat("  Couldn't save annotated regions - Annotation will have to be done again next run\n"))
 }
 
 
-get_mut_effects <- function(test_regions.gr, test_region_path, annotate_cds_effects){
+get_mut_effects <- function(test_regions.gr, genome, test_region_path, annotate_cds_effects){
   new_name <- paste0(test_region_path, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''))
   rds_path <- paste0(new_name, '.rds')
   md5_path <- paste0(new_name, '.md5')
@@ -630,7 +629,7 @@ get_mut_effects <- function(test_regions.gr, test_region_path, annotate_cds_effe
     }
     codon_table.df <- make_codon_table()
     max_cores <- detectCores() # Consider making it possible to run on less than all cores.
-    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, codon_table.df, annotate_cds_effects), mc.cores = max_cores))
+    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, genome, codon_table.df, annotate_cds_effects), mc.cores = max_cores))
     
     save_mut_effects(mut_effects.df, test_region_path, rds_path, md5_path)
   }
@@ -638,7 +637,7 @@ get_mut_effects <- function(test_regions.gr, test_region_path, annotate_cds_effe
   return(mut_effects.df)
 }
 
-annotate_mut_effects <- function(cds.gr, gene_val, codon_table.df, annotate_cds_effects){
+annotate_mut_effects <- function(cds.gr, gene_val, genome, codon_table.df, annotate_cds_effects){
   pyr <- c("C", "T")
   # Tile into 1 bp segments and get sequence. Enumerate codons and bases
   tiled_cds.df <- cds.gr %>%
