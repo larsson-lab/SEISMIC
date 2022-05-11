@@ -73,7 +73,7 @@ main <- function(){
     cat("wrong/no sig_type specified\n")
     quit()
   }
-  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, config$trinuc_bgcount_path, sig_type = config$sig_type)
+  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, config$sig_type, config$seq_type, genome, config$reference_genome, config$exon_definitions_path)
   combined_mutfreqs.df <- combine_mutfreq_varnucs(mutfreqs.df)
   
   
@@ -808,9 +808,29 @@ make_codon_table <- function(){
 
 # Function to calculate mutation frequencies per trinuc and varnuc in each patient.
 # For WXS data, estimate patient-specific mutation frequencies by scaling cohort-level mutation frequencies to mutational burden in patients
-calculate_mutfreqs <- function(mutations.gr, trinuc_bg_path, sig_type){
-  # Read trinuc bg counts for correct region (cds regions/whole genome)
-  trinuc_bg_counts.df <- read_tsv(trinuc_bg_path, col_types = cols(trinuc = col_character(), count = col_double()))
+calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembly_arg, wxs_exons_path){
+  # Get trinucleotide counts in exons (WXS) or chr1-22 (WGS). Limit mutations to the same regions for the mutfreq calculation.
+  if(seq_type == 'WGS'){
+    gr <- get_genome_gr(genome, paste0('chr', 1:22))
+  } else if(seq_type == 'WXS'){
+    # If WXS data, filter the exons data file to get the right assembly exon definitions
+    if(assembly_arg %in% c('hg19', 'GRCh37')) assembly_both_formats <- c('hg19', 'GRCh37')
+    if(assembly_arg %in% c('hg38', 'GRCh38')) assembly_both_formats <- c('hg38', 'GRCh38')
+    gr <- read_tsv(wxs_exons_path,
+                   col_types = cols(
+                     seqnames = col_character(),
+                     start = col_integer(),
+                     end = col_integer(),
+                     assembly = col_character()
+                   )) %>%
+      filter(assembly %in% assembly_both_formats) %>%
+      as_granges()
+  } else{
+    cat("Incorrect seq_type in config. Quitting\n")
+    quit()
+  }
+  trinuc_bg_counts.df <- get_genome_trinuc_bgfreqs(genome, gr)
+  mutations.gr <- mutations.gr %>% filter_by_overlaps(gr)
   
   # All combinations of patient, trinuc (pyr-centric) and varnuc (in order to add missing rows to mut_burden/mut_freqs)
   DNA_bases <- c("A", "C", "G", "T")
@@ -1306,6 +1326,20 @@ load_bsgenome <- function(assembly){
   }
 }
 
+# Get a GRanges object from BSGenome object genome, optionally only certain chroms.
+get_genome_gr <- function(genome, chroms = NA){
+  chroms <- ifelse(is.na(chroms), seqnames(chroms), chroms)
+  GRanges(seqnames = chroms, strand = '+', ranges = IRanges(start = 1, width = seqlengths(genome)[chroms]))
+}
+
+# Get trinuc frequencies on both strands in GRanges object "gr", using BSGenome "genome"
+get_genome_trinuc_bgfreqs <- function(genome, gr){
+  # Should perhaps stretch out 1 here to get trinucs at mutations right at the end of the regions,
+  # but it will make nearly zero difference, and risk a crash if the supplied regions make getSeq try to get something outside of the chromosome boundaries.
+  seq <- getSeq(genome, gr) 
+  trinuc_bg_counts <- colSums(trinucleotideFrequency(seq) + trinucleotideFrequency(reverseComplement(seq)))
+  tibble(trinuc = names(trinuc_bg_counts), count = trinuc_bg_counts)
+}
 
 ################################################
 # Run the main function
