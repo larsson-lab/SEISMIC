@@ -15,7 +15,7 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 - `inline` (0.3.19)
 - `Rcpp` (1.0.8.3)
 - `fitdistrplus` (1.1.8)
-- `data`.table (1.14.2)
+- `data.table` (1.14.2)
 - `plyranges` (1.14.0)
 - `BSgenome.Hsapiens.UCSC.hg19` (1.4.3) and/or `BSgenome.Hsapiens.UCSC.hg38` (1.4.4)
 
@@ -29,7 +29,7 @@ There is an installation script for the required R packages (`demo/install_R_dep
 ## Demo
 There is a demo script (demo/run_demo.sh) that uses SEISMIC to analyse TCGA UCEC SNVs in gene CDSs. Before running this script, make sure to install the required R packages (see above). SEISMIC will use the settings in `demo/demo_config.yaml`. If the machine running the demo has ample RAM, multi-threading can be enabled by changing the "cores" value in the config file to speed up analysis. For reference, 5-10 GB of RAM may be used per thread.
 
-The demo script first generates the required mutation effect annotation file (\~15 min, using \~25 GB RAM), and then runs SEISMIC (1 h 40 min using \~75 GB RAM running on 10 threads on our system). The expected output is the file `demo/output/SEISMIC_demo_UCEC_WXS_result__unadjusted_bkg_mutrate_cohort_sig_UCEC_min_3_muts_10000_sims.tsv`, with genes listed by P value and the same results as in the UCEC analysis in the paper.
+The demo script runs SEISMIC, which first annotates mutation effects in gene CDSs (10 min using 16 GB RAM on our system with 16 threads available), and then runs the test (1 h 40 min using \~75 GB RAM running on 10 threads on our system). The expected output is the file `demo/output/SEISMIC_demo_UCEC_WXS_result__unadjusted_bkg_mutrate_cohort_sig_UCEC_min_3_muts_10000_sims.tsv`, with genes listed by P value and the same results as in the UCEC analysis in the paper.
 
 
 ## Usage
