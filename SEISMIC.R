@@ -630,8 +630,8 @@ get_mut_effects <- function(test_regions.gr, genome, test_region_path, annotate_
       config$effects_to_keep <- 'na'
     }
     codon_table.df <- make_codon_table()
-    max_cores <- detectCores() # Consider making it possible to run on less than all cores.
-    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, genome, codon_table.df, annotate_cds_effects), mc.cores = max_cores))
+    mut_effect_cores <- min(detectCores(), 32) # Run on as many threads as possible, but limit to 32 just in case a system has a very large number of cores without a proportional amount of RAM. More than that shouldn't impact time too much anyway.
+    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, genome, codon_table.df, annotate_cds_effects), mc.cores = mut_effect_cores))
     
     save_mut_effects(mut_effects.df, test_region_path, rds_path, md5_path)
   }
