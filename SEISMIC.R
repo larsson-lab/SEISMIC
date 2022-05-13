@@ -41,12 +41,8 @@ main <- function(){
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
-  col_types <- c(list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character()), region = col_character())
-  test_regions.gr <- read_tsv(config$test_regions_path, col_types = do.call(cols, col_types)) %>%
-    dplyr::rename(test_region = region) %>% 
-    as_granges()
+  test_regions.gr <- read_test_regions(config$test_regions_path, config$reference_genome)
   
-
   # Start a list of test regions (typically genes) with everything that might be analysed based on every region that has annotations
   # Filter to remove undesired regions later
   test_region_list <- test_regions.gr$test_region %>% unique()
@@ -567,7 +563,34 @@ read_mutations <- function(path, cancer_type, genome, patient_colname = 'Tumor_S
   return(mutations)
 }
 
-
+# Read test regions, either with or with genome assembly filtering (hg19/hg38)
+read_test_regions <- function(test_regions_path, assembly_arg){
+  con <- file(test_regions_path, "r")
+  colnames_in_file <- readLines(con, n=1) %>% str_split('\t') %>% unlist()
+  close(con)
+  
+  assembly_both_formats <- get_chromosome_synonyms(assembly_arg)
+  
+  exp_colnames_no_assembly <- c('seqnames', 'start', 'end', 'region', 'strand')
+  
+  col_types <- list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character(), region = col_character())
+  if(setequal(colnames_in_file, exp_colnames_no_assembly)){
+    cat("Loading all regions in", test_regions_path, "\n")
+    test_regions <- read_tsv(test_regions_path, col_types = do.call(cols, col_types))
+  } else if(setequal(colnames_in_file, c(exp_colnames_no_assembly, 'assembly'))){
+    cat("Loading", assembly_arg, "regions in", test_regions_path, "\n")
+    test_regions <- read_tsv(test_regions_path, col_types = do.call(cols, c(col_types, list(assembly = col_character())))) %>% 
+      filter(assembly %in% assembly_both_formats) %>% 
+      select(-assembly)
+  } else {
+    cat("Column names not as expected in ", test_regions_path, "\n")
+    quit()
+  }
+  
+  test_regions %>% 
+    dplyr::rename(test_region = region) %>% 
+    as_granges()
+}
 
 
 
@@ -794,8 +817,7 @@ calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembl
     gr <- get_genome_gr(genome, paste0('chr', 1:22))
   } else if(seq_type == 'WXS'){
     # If WXS data, filter the exons data file to get the right assembly exon definitions
-    if(assembly_arg %in% c('hg19', 'GRCh37')) assembly_both_formats <- c('hg19', 'GRCh37')
-    if(assembly_arg %in% c('hg38', 'GRCh38')) assembly_both_formats <- c('hg38', 'GRCh38')
+    assembly_both_formats <- get_chromosome_synonyms(assembly_arg)
     gr <- read_tsv(wxs_exons_path,
                    col_types = cols(
                      seqnames = col_character(),
@@ -1314,6 +1336,12 @@ get_genome_trinuc_bgfreqs <- function(genome, gr){
   seq <- getSeq(genome, gr) 
   trinuc_bg_counts <- colSums(trinucleotideFrequency(seq) + trinucleotideFrequency(reverseComplement(seq)))
   tibble(trinuc = names(trinuc_bg_counts), count = trinuc_bg_counts)
+}
+
+get_chromosome_synonyms <- function(assembly_arg){
+  if(assembly_arg %in% c('hg19', 'GRCh37')) assembly_both_formats <- c('hg19', 'GRCh37')
+  if(assembly_arg %in% c('hg38', 'GRCh38')) assembly_both_formats <- c('hg38', 'GRCh38')
+  return(assembly_both_formats)
 }
 
 ################################################
