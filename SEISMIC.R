@@ -41,9 +41,9 @@ main <- function(){
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
-  col_types <- c(list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character()), eval(parse(text=paste("list(", config$test_region_name, "= col_character())"))))
+  col_types <- c(list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character()), region = col_character())
   test_regions.gr <- read_tsv(config$test_regions_path, col_types = do.call(cols, col_types)) %>%
-    rename_test_region(config$test_region_name) %>% 
+    dplyr::rename(test_region = region) %>% 
     as_granges()
   
 
@@ -252,7 +252,7 @@ main <- function(){
       return(tibble(test=character(),
                     test_value=double(),
                     rank=double(),
-                    (!!sym(config$test_region_name)):=character(),
+                    region=character(),
                     obs_mutated_count=double(),
                     exp_mutated_count=double(),
                     scaling_factor=double()))
@@ -422,7 +422,7 @@ main <- function(){
     
     if(regular_output_mode){
       output.df %>%
-        mutate((!!sym(config$test_region_name)) := current_test_region,
+        mutate(region = current_test_region,
                obs_mutated_count = obs_no_of_mutated_patients,
                exp_mutated_count = sum(mutprobs_test_region.df$pmut))
     } else {
@@ -565,26 +565,6 @@ read_mutations <- function(path, cancer_type, genome, patient_colname = 'Tumor_S
     mutations <- read_mutations_from_maf(path, genome, cancer_type, patient_colname, cancer_colname)
   }
   return(mutations)
-}
-
-
-
-# Read mut_effects for a certain test_region (e.g. gene) from sqlite database file
-# Used so as to not have to keep too much data in memory
-read_mut_effects_from_db <- function(path, table_name, test_region_name){
-  mydb <- dbConnect(RSQLite::SQLite(), path)
-  df <- tbl(mydb, table_name) %>% 
-    filter(test_region == test_region_name) %>%
-    collect()
-  dbDisconnect(mydb)
-  return(df)
-}
-
-# Write a dataframe to a sqlite database
-write_df_to_db <- function(df, path, table_name){
-  mydb <- dbConnect(RSQLite::SQLite(), path)
-  dbWriteTable(mydb, table_name, df)
-  dbDisconnect(mydb)
 }
 
 
@@ -1270,11 +1250,6 @@ get_pyr_trinucs <- function(){
   pyrs <- c("C", "T")
   pyr_trinucs <- expand.grid(DNA_bases, pyrs, DNA_bases) %>% apply(1, paste0, collapse="")
   return(pyr_trinucs)
-}
-
-# Rename region grouping to be tested (most often gene) to "test_region"
-rename_test_region <- function(df, test_region_name){
-  dplyr::rename(df, test_region = (!!sym(test_region_name)))
 }
 
 # Get full range spanned by ranges with the same column_name, e.g. start of first cds to end of last cds for a gene

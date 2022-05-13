@@ -1,4 +1,4 @@
-seqnames	start	end	strand	gene
+seqnames	start	end	strand	region
 chr1	66999139	66999638	+	SGIP1
 chr1	8377645	8378144	+	SLC45A1
 chr1	16766667	16767166	+	NECAP2
