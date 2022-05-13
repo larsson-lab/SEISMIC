@@ -5,7 +5,6 @@ exon_definitions_path: "data/exons.tsv.gz"
 # expression_path: "data/TCGA_mean_expression.tsv"
 # repl_timing_path: "data/replication_timing.bed"
 test_regions_path: "data/gene_cds.tsv"
-test_region_name: "gene"
 
 out_dir: "demo/output/"
 out_base_name: "SEISMIC_demo_UCEC_WXS_result_"

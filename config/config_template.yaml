@@ -5,7 +5,6 @@ exon_definitions_path: "data/exons.tsv.gz" # Path to exon definitions, used for 
 expression_path: "data/TCGA_mean_expression.tsv" # Path to file with mean expression data for each gene. Only relevant when using this type of scaling in recurrence-based methods.
 repl_timing_path: "data/replication_timing.bed" # Path to file with replication timing. Only relevant when using this type of scaling in recurrence-based methods.
 test_regions_path: "data/gene_cds.tsv" # Path to file with region definitions.
-test_region_name: "gene" # Name of the type of region being analysed (same as that column in the mutations file)
 
 out_dir: "demo/output/" # Output directory. Trailing slash.
 out_base_name: "SEISMIC_result" # Output file name will start with this.
