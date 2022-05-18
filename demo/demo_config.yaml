@@ -1,7 +1,6 @@
 mutations_path: "demo/TCGA_UCEC_SNVs.tsv"
 # maf_patient_column_name: "Tumor_Sample_Barcode"
 # maf_cancer_column_name:
-exon_definitions_path: "data/exons.tsv"
 # expression_path: "data/TCGA_mean_expression.tsv"
 # repl_timing_path: "data/replication_timing.bed"
 test_regions_path: "data/gene_cds.tsv"
@@ -23,6 +22,7 @@ effects_to_keep:
 scale_exp_to_repl_reg: FALSE
 scale_exp_to_expr_reg: FALSE
 # min_test_region_length_for_regression: 5000
+wxs_covered_regions_path: "data/cds_chr1-22.tsv"
 
 
 # WGS-specific

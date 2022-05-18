@@ -69,7 +69,7 @@ main <- function(){
     cat("wrong/no sig_type specified\n")
     quit()
   }
-  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, config$sig_type, config$seq_type, genome, config$reference_genome, config$exon_definitions_path)
+  mutfreqs.df <- calculate_mutfreqs(all_mutations.gr, config$sig_type, config$seq_type, genome, config$reference_genome, config$wxs_covered_regions_path)
   combined_mutfreqs.df <- combine_mutfreq_varnucs(mutfreqs.df)
   
   
@@ -95,7 +95,7 @@ main <- function(){
       if(config$scale_exp_to_expr_reg){
         cat("  Expression\n")
         reglist <- reglist %>% scale_exp_to_expr_reg(config$expression_path, config$cancer_type)
-        if(!("log_expr" %in% config$variables)){
+        if(!("log_expr" %in% reglist$variables)){
           cat("    Expression scaling skipped\n")
         }
       }
@@ -811,14 +811,14 @@ make_codon_table <- function(){
 
 # Function to calculate mutation frequencies per trinuc and varnuc in each patient.
 # For WXS data, estimate patient-specific mutation frequencies by scaling cohort-level mutation frequencies to mutational burden in patients
-calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembly_arg, wxs_exons_path){
+calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembly_arg, wxs_mutfreq_regions){
   # Get trinucleotide counts in exons (WXS) or chr1-22 (WGS). Limit mutations to the same regions for the mutfreq calculation.
   if(seq_type == 'WGS'){
     gr <- get_genome_gr(genome, paste0('chr', 1:22))
   } else if(seq_type == 'WXS'){
     # If WXS data, filter the exons data file to get the right assembly exon definitions
     assembly_both_formats <- get_chromosome_synonyms(assembly_arg)
-    gr <- read_tsv(wxs_exons_path,
+    gr <- read_tsv(wxs_mutfreq_regions,
                    col_types = cols(
                      seqnames = col_character(),
                      start = col_integer(),
@@ -826,7 +826,9 @@ calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembl
                      assembly = col_character()
                    )) %>%
       filter(assembly %in% assembly_both_formats) %>%
-      as_granges()
+      select(-strand) %>% # Get rid of strand before granges conversion so that reduce doesn't leave overlaps on different strands.
+      as_granges() %>% 
+      reduce()
   } else{
     cat("Incorrect seq_type in config. Quitting\n")
     quit()
