@@ -10,7 +10,7 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 - `tidyverse` (1.3.1)
 - `yaml` (2.3.5)
 - `foreach` (1.5.2)
-- `doParallel` (1.0.17)
+- `doSNOW` (1.0.20)
 - `stringi` (1.7.6)
 - `inline` (0.3.19)
 - `Rcpp` (1.0.8.3)

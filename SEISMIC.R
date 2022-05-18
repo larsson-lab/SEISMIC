@@ -6,7 +6,7 @@ suppressPackageStartupMessages(library(plyranges))
 suppressPackageStartupMessages(library(yaml))
 suppressPackageStartupMessages(library(data.table))
 suppressPackageStartupMessages(library(foreach))
-suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(doSNOW))
 suppressPackageStartupMessages(library(stringi))
 suppressPackageStartupMessages(library(inline))
 suppressPackageStartupMessages(library(Rcpp))
@@ -24,6 +24,8 @@ main <- function(){
   if(length(args) > 2){
     config$cancer_type <- args[3]
   }
+  
+  print_logo()
   
   genome <- load_bsgenome(config$reference_genome)
   system(paste("mkdir -p", config$out_dir))
@@ -159,15 +161,36 @@ main <- function(){
   # Remove unnuecessary objects to decrease memory usage
   rm(all_mutations.gr)
   gc()
+  
 
-  registerDoParallel(cores = no_of_cores)
-  ranks.df <- foreach(i = 1:length(test_region_list), .combine = 'bind_rows', .errorhandling = 'remove') %dopar% {
+  
+  
+ 
+    
+
+  
+  
+  
+
+  cat("Testing regions\n")
+  pb <- txtProgressBar(max = length(test_region_list), style = 3)
+  progress <- function(n) setTxtProgressBar(pb, n)
+  opts <- list(progress = progress)
+  
+  cl <- makeCluster(no_of_cores, type="SOCK")
+  clusterCall(cl, worker.init)
+  registerDoSNOW(cl)
+  
+  ranks.df <- foreach(i = 1:length(test_region_list),
+                      .combine = 'bind_rows',
+                      .errorhandling = 'remove',
+                      .inorder = FALSE,
+                      .multicombine = TRUE,
+                      .options.snow = opts,
+                      .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'yaml', 'data.table', 'stringi', 'inline', 'Rcpp'),
+                      .export = ls(.GlobalEnv)) %dopar% {
+
     current_test_region <- test_region_list[i]
-    
-    
-    
-    # profvis({ # start memory profiling
-    cat(current_test_region, "\n")
     
     # Get only positions in the current test region
     test_region_mut_effects.gr <- mut_effects.df %>% filter(test_region == current_test_region) %>% as_granges()
@@ -431,6 +454,8 @@ main <- function(){
     
   }
   # End of loop
+  stopCluster(cl)
+  cat("\n") # Just to get a newline after the progress bar.
   
   ##################################
   # Output
@@ -575,15 +600,15 @@ read_test_regions <- function(test_regions_path, assembly_arg){
   
   col_types <- list(seqnames = col_character(), start = col_integer(), end = col_integer(), strand = col_character(), region = col_character())
   if(setequal(colnames_in_file, exp_colnames_no_assembly)){
-    cat("Loading all regions in", test_regions_path, "\n")
+    cat("  Loading all regions in", test_regions_path, "\n")
     test_regions <- read_tsv(test_regions_path, col_types = do.call(cols, col_types))
   } else if(setequal(colnames_in_file, c(exp_colnames_no_assembly, 'assembly'))){
-    cat("Loading", assembly_arg, "regions in", test_regions_path, "\n")
+    cat("  Loading", assembly_arg, "regions in", test_regions_path, "\n")
     test_regions <- read_tsv(test_regions_path, col_types = do.call(cols, c(col_types, list(assembly = col_character())))) %>% 
       filter(assembly %in% assembly_both_formats) %>% 
       select(-assembly)
   } else {
-    cat("Column names not as expected in ", test_regions_path, "\n")
+    cat("  Column names not as expected in ", test_regions_path, "\n")
     quit()
   }
   
@@ -828,7 +853,7 @@ calculate_mutfreqs <- function(mutations.gr, sig_type, seq_type, genome, assembl
       filter(assembly %in% assembly_both_formats) %>%
       select(-strand) %>% # Get rid of strand before granges conversion so that reduce doesn't leave overlaps on different strands.
       as_granges() %>% 
-      reduce()
+      GenomicRanges::reduce()
   } else{
     cat("Incorrect seq_type in config. Quitting\n")
     quit()
@@ -1229,30 +1254,36 @@ sim_fixed_mutated_count <- function(no_of_patients, no_of_mutations, exp_mut_cou
 ################################################
 # Improved sampling method to speed up sampling without replacement, with probability weights.
 # https://stackoverflow.com/questions/15113650/faster-weighted-sampling-without-replacement
+# Had to put it inside a function that is called in each worker now that I'm using doSNOW. Just exporting faster_sample didn't work (https://stackoverflow.com/a/18245658)
 ################################################
 
-src <- 
-  '
-int num = as<int>(size), x = as<int>(n);
-Rcpp::NumericVector vx = Rcpp::clone<Rcpp::NumericVector>(x);
-Rcpp::NumericVector pr = Rcpp::clone<Rcpp::NumericVector>(prob);
-Rcpp::NumericVector rnd = rexp(x) / pr;
-for(int i= 0; i<vx.size(); ++i) vx[i] = i;
-std::partial_sort(vx.begin(), vx.begin() + num, vx.end(), Comp(rnd));
-vx = vx[seq(0, num - 1)] + 1;
-return vx;
-'
-incl <- 
-  '
-struct Comp{
-  Comp(const Rcpp::NumericVector& v ) : _v(v) {}
-  bool operator ()(int a, int b) { return _v[a] < _v[b]; }
-  const Rcpp::NumericVector& _v;
-};
-'
-faster_sample <- cxxfunction(signature(n = "Numeric", size = "integer", prob = "numeric"),
-                       src, plugin = "Rcpp", include = incl)
 
+worker.init <- function(){
+  suppressPackageStartupMessages(library(inline))
+
+  src <- 
+    '
+  int num = as<int>(size), x = as<int>(n);
+  Rcpp::NumericVector vx = Rcpp::clone<Rcpp::NumericVector>(x);
+  Rcpp::NumericVector pr = Rcpp::clone<Rcpp::NumericVector>(prob);
+  Rcpp::NumericVector rnd = rexp(x) / pr;
+  for(int i= 0; i<vx.size(); ++i) vx[i] = i;
+  std::partial_sort(vx.begin(), vx.begin() + num, vx.end(), Comp(rnd));
+  vx = vx[seq(0, num - 1)] + 1;
+  return vx;
+  '
+  incl <- 
+    '
+  struct Comp{
+    Comp(const Rcpp::NumericVector& v ) : _v(v) {}
+    bool operator ()(int a, int b) { return _v[a] < _v[b]; }
+    const Rcpp::NumericVector& _v;
+  };
+  '
+  assign('faster_sample', cxxfunction(signature(n = "Numeric", size = "integer", prob = "numeric"),
+                             src, plugin = "Rcpp", include = incl), .GlobalEnv)
+
+}
 
 sim_fixed_mutated_count2 <- function(no_of_patients, no_of_mutations, exp_mut_counts) {
   result <- numeric(no_of_patients)
@@ -1344,6 +1375,29 @@ get_chromosome_synonyms <- function(assembly_arg){
   if(assembly_arg %in% c('hg19', 'GRCh37')) assembly_both_formats <- c('hg19', 'GRCh37')
   if(assembly_arg %in% c('hg38', 'GRCh38')) assembly_both_formats <- c('hg38', 'GRCh38')
   return(assembly_both_formats)
+}
+
+print_logo <- function(){
+logo <- r"{
+                                                  _________           
+                                                _/         \_         
+                                               /     ___     \        
+                                              /    -     -    \       
+                     ***                     /    /  ***  \    \      
+                    *****                   |    |  *****  |    |     
+                     ***                     \    \  ***  /    /      
+                                              \     -   -     /       
+  ****     *******   ***     ****     **        **   ***    _/ ****   
+***  ***   *******   ***   ***  ***   ***      *** __***___/ ******** 
+***   **   **        ***   ***   **   ****    ****   ***    ***    ***
+ ****      *****     ***    ****      *****  *****   ***   ***        
+   ****    *****     ***      ****    *** **** ***   ***   ***        
+**   ***   **        ***   **   ***   ***  **  ***   ***    ***    ***
+***  ***   *******   ***   ***  ***   ***      ***   ***     ******** 
+  ****     *******   ***     ****     ***      ***   ***       ****   
+                                                                      
+}"
+cat(logo)
 }
 
 ################################################
