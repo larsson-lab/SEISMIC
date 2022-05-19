@@ -28,6 +28,9 @@ main <- function(){
   
   print_logo()
   
+  # If we are not dealing with CDSs, all mutation effects will be 'na', so change effects_to_keep to that to not filter anything out.
+  if(!config$annotate_cds_effects) config$effects_to_keep <- 'na'
+  
   genome <- load_bsgenome(config$reference_genome)
   system(paste("mkdir -p", config$out_dir))
   
@@ -657,7 +660,6 @@ get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path,
       cat("Annotating regions with mutation effects\n")
     } else {
       cat("Annotating regions without mutation effects\n")
-      config$effects_to_keep <- 'na'
     }
     codon_table.df <- make_codon_table()
     mut_effect_cores <- min(detectCores(), 32) # Run on as many threads as possible, but limit to 32 just in case a system has a very large number of cores without a proportional amount of RAM. More than that shouldn't impact time too much anyway.
@@ -738,7 +740,10 @@ annotate_mut_effects <- function(cds.gr, gene_val, genome, codon_table.df, annot
                             G = 'na',
                             T = 'na',
                             test_region = gene_val) %>%
-      select(-width, -strand_switch)
+      select(-width, -strand_switch) %>% 
+      pivot_longer(c(C, A, G, T), values_to = 'effect', names_to = 'varnuc') %>%
+      mutate(effect = ifelse(refnuc == varnuc, 'u', effect)) %>%
+      pivot_wider(names_from = varnuc, values_from = effect)
   }
 }
 
