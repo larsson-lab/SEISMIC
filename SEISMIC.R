@@ -149,6 +149,8 @@ main <- function(){
   # Make mut_effects.df a bit smaller by removing filtered test regions (after all filtering)
   mut_effects.df <- mut_effects.df %>% filter(test_region %in% test_region_list)
   
+  # Split mut_effects.df into list of tibbles, so that we can pass them instead of the full mut_effects.df to foreach workers, to reduce memory usage.
+  mut_effects.df <- split.data.frame(mut_effects.df, mut_effects.df$test_region)
   
   if(length(test_region_list) == 0){
     cat("No regions left for testing after filtering. Quitting\n")
@@ -158,18 +160,17 @@ main <- function(){
   ################################################
   # Analysis loop
   ################################################
+
   # regular_output_mode FALSE only used for development, not in normal use.
   regular_output_mode <- TRUE
   # Remove unnuecessary objects to decrease memory usage
   rm(all_mutations.gr)
   gc()
   
-
   
   
- 
-    
-
+  
+  
   
   
   
@@ -183,7 +184,7 @@ main <- function(){
   clusterCall(cl, worker.init)
   registerDoSNOW(cl)
   
-  ranks.df <- foreach(i = 1:length(test_region_list),
+  ranks.df <- foreach(test_region_mut_effects = mut_effects.df,
                       .combine = 'bind_rows',
                       .errorhandling = 'remove',
                       .inorder = FALSE,
@@ -191,11 +192,10 @@ main <- function(){
                       .options.snow = opts,
                       .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'data.table', 'stringi', 'inline', 'Rcpp'),
                       .export = ls(.GlobalEnv)) %dopar% {
-
-    current_test_region <- test_region_list[i]
+                        
+    current_test_region <- unique(test_region_mut_effects$test_region)
     
-    # Get only positions in the current test region
-    test_region_mut_effects.gr <- mut_effects.df %>% filter(test_region == current_test_region) %>% as_granges()
+    test_region_mut_effects.gr <- test_region_mut_effects %>% as_granges()
     
     # Get trinuc info in test region.
     # For each base, get the trinuc, and include the effect of the 3 possible mutations
