@@ -636,7 +636,7 @@ save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_pat
 
 
 get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path, annotate_cds_effects){
-  new_name <- paste0(test_region_path, '_', assembly, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''))
+  new_name <- paste0(test_region_path, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''), '_', assembly)
   rds_path <- paste0(new_name, '.rds')
   md5_path <- paste0(new_name, '.md5')
   if(all(file.exists(test_region_path, rds_path, md5_path))){
