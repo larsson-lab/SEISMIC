@@ -5,6 +5,7 @@ suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(plyranges))
 suppressPackageStartupMessages(library(yaml))
 suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(parallel))
 suppressPackageStartupMessages(library(foreach))
 suppressPackageStartupMessages(library(doSNOW))
 suppressPackageStartupMessages(library(stringi))
@@ -30,7 +31,7 @@ main <- function(){
   genome <- load_bsgenome(config$reference_genome)
   system(paste("mkdir -p", config$out_dir))
   
-  cat("Loading mutations, mutation effects, and regions\n")
+  cat("Loading mutations\n")
   # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
   all_mutations.gr <- do.call(read_mutations,
           list(path = config$mutations_path,
@@ -42,6 +43,7 @@ main <- function(){
   
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
+  cat("Loading regions\n")
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
   test_regions.gr <- read_test_regions(config$test_regions_path, config$reference_genome)
   
@@ -50,7 +52,7 @@ main <- function(){
   test_region_list <- test_regions.gr$test_region %>% unique()
   
   # Load region annotations, or annotate if there is no pre-existing file.
-  mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$test_regions_path, config$annotate_cds_effects)
+  mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$reference_genome, config$test_regions_path, config$annotate_cds_effects)
   
   cat("Annotating mutations\n")
   effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
@@ -187,7 +189,7 @@ main <- function(){
                       .inorder = FALSE,
                       .multicombine = TRUE,
                       .options.snow = opts,
-                      .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'yaml', 'data.table', 'stringi', 'inline', 'Rcpp'),
+                      .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'data.table', 'stringi', 'inline', 'Rcpp'),
                       .export = ls(.GlobalEnv)) %dopar% {
 
     current_test_region <- test_region_list[i]
@@ -633,8 +635,8 @@ save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_pat
 }
 
 
-get_mut_effects <- function(test_regions.gr, genome, test_region_path, annotate_cds_effects){
-  new_name <- paste0(test_region_path, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''))
+get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path, annotate_cds_effects){
+  new_name <- paste0(test_region_path, '_', assembly, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''))
   rds_path <- paste0(new_name, '.rds')
   md5_path <- paste0(new_name, '.md5')
   if(all(file.exists(test_region_path, rds_path, md5_path))){
