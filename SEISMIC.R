@@ -619,7 +619,8 @@ read_test_regions <- function(test_regions_path, assembly_arg){
   
   test_regions %>% 
     dplyr::rename(test_region = region) %>% 
-    as_granges()
+    as_granges() %>%
+    arrange(test_region, seqnames, start)
 }
 
 
@@ -676,6 +677,7 @@ annotate_mut_effects <- function(cds.gr, gene_val, genome, codon_table.df, annot
   # Tile into 1 bp segments and get sequence. Enumerate codons and bases
   tiled_cds.df <- cds.gr %>%
     filter(test_region == gene_val) %>% 
+    arrange(start) %>%
     tile_ranges(1) %>%
     select(-partition) %>%
     mutate(ref_trinuc = getSeq(genome, . + 1),
