@@ -34,18 +34,6 @@ main <- function(){
   genome <- load_bsgenome(config$reference_genome)
   system(paste("mkdir -p", config$out_dir))
   
-  cat("Loading mutations\n")
-  # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
-  all_mutations.gr <- do.call(read_mutations,
-          list(path = config$mutations_path,
-               cancer_type = config$cancer_type,
-               genome = genome) %>%
-            {if(!is.null('config$maf_cancer_column_name')){c(., cancer_colname = config$maf_cancer_column_name)} else .} %>%
-            {if(!is.null('config$maf_patient_column_name')){c(., patient_colname = config$maf_patient_column_name)} else .}
-  )
-  
-  no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
-  
   cat("Loading regions\n")
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
   test_regions.gr <- read_test_regions(config$test_regions_path, config$reference_genome)
@@ -56,6 +44,18 @@ main <- function(){
   
   # Load region annotations, or annotate if there is no pre-existing file.
   mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$reference_genome, config$test_regions_path, config$annotate_cds_effects)
+  
+  cat("Loading mutations\n")
+  # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
+  all_mutations.gr <- do.call(read_mutations,
+                              list(path = config$mutations_path,
+                                   cancer_type = config$cancer_type,
+                                   genome = genome) %>%
+                                {if(!is.null('config$maf_cancer_column_name')){c(., cancer_colname = config$maf_cancer_column_name)} else .} %>%
+                                {if(!is.null('config$maf_patient_column_name')){c(., patient_colname = config$maf_patient_column_name)} else .}
+  )
+  
+  no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   cat("Annotating mutations\n")
   effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
