@@ -166,7 +166,7 @@ main <- function(){
 
   # regular_output_mode FALSE only used for development, not in normal use.
   regular_output_mode <- TRUE
-  # Remove unnuecessary objects to decrease memory usage
+  # Remove unnecessary objects to decrease memory usage
   rm(all_mutations.gr)
   gc()
   
@@ -202,48 +202,49 @@ main <- function(){
     
     # Get trinuc info in test region.
     # For each base, get the trinuc, and include the effect of the 3 possible mutations
-    test_region_trinucs_all_mutations.df <- test_region_mut_effects.gr %>%
+    test_region_mut_effects_tidy.df <- test_region_mut_effects.gr %>%
       as_tibble() %>%
       select(trinuc = ref_trinuc, C, A, G, T, base_no) %>%
       pivot_longer(-c(trinuc, base_no), names_to = "varnuc", values_to = "effect") %>% 
       filter(effect != "u") # 'u' refers to unchanged, e.g., A>A "mutation"
     
-    # Further filter to effects included in config$effects_to_keep
-    # Most common example: keep only non-silent mutations in a gene
-    test_region_trinucs_effect_filtered_combined_varnucs.df <- test_region_trinucs_all_mutations.df %>% 
-      filter(effect %in% config$effects_to_keep) %>% 
-      group_by(trinuc, base_no) %>%
-      arrange(varnuc) %>%
-      summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
     
-   # For use with filter_by_overlaps (smaller after reducing).
-    test_region_remaining.gr <- test_region_mut_effects.gr %>%
-      GenomicRanges::reduce()
+    
+    # Negligible performance difference from defining the function inside the loop, and easier to read.
+    calc_mutprobs_per_base <- function(test_region_mut_effects_tidy.df, combined_mutfreqs.df, effects_to_keep = NULL){
+      # Further filter to effects included in config$effects_to_keep
+      # Most common example: keep only non-silent mutations in a gene
+      test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df <- test_region_mut_effects_tidy.df %>% 
+        { if(is.null(effects_to_keep)) . else filter(., effect %in% effects_to_keep) } %>% 
+        group_by(trinuc, base_no) %>%
+        arrange(varnuc) %>%
+        summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
+      
+      # Get probability of mutation at each base in the test region
+      mutprobs_per_base.df <- test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df %>%
+        inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
+        select(sampleID, pmut = mutfreq)
+      
+      mutprobs_per_base.df
+    }
+    
+    mutprobs_per_base.df <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df, config$effects_to_keep)
+    
+
     
     # Filter mutations to only look at those overlapping the test regions (e.g., the CDSs in a gene)
     mutations.df <- effect_filtered_mutations.gr %>% 
-      filter_by_overlaps(test_region_remaining.gr) %>% 
+      filter_by_overlaps(
+        test_region_mut_effects.gr %>% GenomicRanges::reduce() # Reduce probably unnecessary to perform manually.
+        ) %>% 
       as_tibble()
     
+    
+
     # Take each mutation in a each gene and make a tibble with that info as binary "mutated" status
     donor_mutated.df <- mutations.df %>% 
       group_by(sampleID) %>% 
       summarise(mutated = sign(dplyr::n()), .groups = 'drop')
-    
-    # Get probability of mutation at each base in the test region
-    mutprobs_per_base.df <- test_region_trinucs_effect_filtered_combined_varnucs.df %>%
-      inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
-      select(sampleID, pmut = mutfreq)
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     
     
     
@@ -252,14 +253,8 @@ main <- function(){
     if(scale_with_regression){
       # Have to redo the probability of mutation at each base to include all mutations (not filtering e.g. silent)
       # when calculating the expected number of mutations, as the observed mutation rate in reglist includes all mutations.
-      test_region_trinucs_all_mutations_combined_varnucs.df <- test_region_trinucs_all_mutations.df %>% 
-        group_by(trinuc, base_no) %>%
-        arrange(varnuc) %>%
-        summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
-
-      no_of_exp_mutations <- test_region_trinucs_all_mutations_combined_varnucs.df %>% 
-        inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
-        .$mutfreq %>%
+      no_of_exp_mutations <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df) %>%
+        pull(pmut) %>%
         sum()
       
       test_region_mutrate <- reglist$test_region_mutrate %>% filter(test_region == current_test_region)
