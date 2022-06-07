@@ -11,6 +11,7 @@ suppressPackageStartupMessages(library(doSNOW))
 suppressPackageStartupMessages(library(stringi))
 suppressPackageStartupMessages(library(inline))
 suppressPackageStartupMessages(library(Rcpp))
+suppressPackageStartupMessages(library(cowplot))
 
 main <- function(){
   args <- commandArgs(trailingOnly = TRUE)
@@ -58,8 +59,12 @@ main <- function(){
   no_of_patients <- all_mutations.gr$sampleID %>% unique() %>% length()
   
   cat("Annotating mutations\n")
-  effect_filtered_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df) %>%
-    filter_mutation_effect_keep(config$effects_to_keep)
+  annotated_mutations.gr <- annotate_mutations(all_mutations.gr, mut_effects.df)
+  effect_filtered_mutations.gr <- filter_mutation_effect_keep(annotated_mutations.gr, config$effects_to_keep)
+  mutations_with_effects_for_plotting.df <- annotated_mutations.gr %>% as_tibble() %>% select(sampleID, base_no, codon_no, test_region, effect, refnuc, varnuc, strand)
+  
+  
+  
   
   cat("Calculating mutational frequencies\n")
   if(config$sig_type == "patient"){
@@ -167,7 +172,7 @@ main <- function(){
   # regular_output_mode FALSE only used for development, not in normal use.
   regular_output_mode <- TRUE
   # Remove unnecessary objects to decrease memory usage
-  rm(all_mutations.gr)
+  rm(all_mutations.gr, annotated_mutations.gr)
   gc()
   
   
@@ -399,7 +404,6 @@ main <- function(){
         if(cohort_dist_scaling_ok){
           test_value <- cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated)
           
-          
           # This doesn't work well for very low mutated counts, particularly just 1 (since that's not unimodal at all). Even 2 seems fine though.
           invisible(capture.output(
           fit.gamma <- fitdist(-sapply(1:config$no_of_simulations,
@@ -408,15 +412,98 @@ main <- function(){
                                distr = "gamma",
                                method = "mle")
           ))
-  
+       
+          p_val <- pgamma(-test_value, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F)
           output.df <- tibble(
             test_value = test_value,
             scaling_factor = scaling_factor_cohortdist,
             expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
             rank = NA,
-            p = pgamma(-test_value, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F),
+            p = p_val,
             test = "cohort_dist") %>%
             bind_rows(output.df)
+          
+          
+          # PLOT HERE
+          
+          plot_cohort_dist_fit <- function(fit.gamma, obs_val, p_val){
+            min_dist <- qgamma(0.01, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = T)
+            min_lim <- min(-obs_val, min_dist)*0.95
+            
+            max_dist <- qgamma(0.01, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F)
+            max_lim <- max(-obs_val, max_dist)*1.05
+            
+            plot_max_y <- max(sapply(seq(min_dist, max_dist, by = (max_dist - min_dist) / 100),
+                       function(x) dgamma(x, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"])))
+            
+            tibble(negLogP = c(min_lim, max_lim)) %>% 
+              ggplot(aes(x=-obs_val)) +
+              stat_function(fun=dgamma, args=list(shape=fit.gamma$estimate["shape"], rate=fit.gamma$estimate["rate"]), aes(fill='simcolor'), geom = 'area', xlim = c(min_lim, max_lim)) +
+              geom_point(data = tibble(negLogP = obs_val), aes(y = 0)) +
+              xlab('-Log likelihood of cohort mutation distribution') +
+              geom_segment(x = -obs_val, y = plot_max_y*0.2, xend = -obs_val, yend = 0,
+                           arrow = arrow()) +
+              geom_text(x = -obs_val, y = plot_max_y * 0.3, label = paste0('Real cohort\nP = ', formatC(p_val, digits = 2)), hjust="inward") +
+              scale_y_continuous(expand = c(0, 0)) +
+              scale_fill_manual(name = '', values = c('simcolor' = '#AEC7E8'), labels = c('simcolor' = 'Simulations')) +
+              ggtitle('Cohort distribution\ntest result') +
+              theme_classic() +
+              theme(
+                axis.title.y = element_blank(),
+                axis.ticks.y = element_blank(),
+                axis.text.y =  element_blank()
+                
+              )
+          }
+          
+          
+          plot_cohort_dist_cumsum <- function(mutprobs_test_region_cohortdist.df, no_of_patients, obs_no_of_mutated_patients, effects_to_keep, no_of_simulations){
+            sims <- sapply(1:no_of_simulations, function(x) cumsum(sim_fixed_mutated_count2(no_of_patients, obs_no_of_mutated_patients, mutprobs_test_region_cohortdist.df$exp_mut_count)))
+            cumsum_mutated_quantiles <- sapply(1:no_of_patients, function(x) quantile(sims[x,], probs = c(0.05, 0.95))) %>% t() %>% as_tibble() %>% mutate(i = row_number())
+            
+            label_fun <- function(effect){
+              if(effect == 'm'){
+                '- Missense'
+              } else if(effect == 'n'){
+                '- Nonsense'
+              } else if(effect == 's'){
+                '- Silent'
+              } else {
+                ''
+              }
+            }
+            
+            effect_label <- paste0("Mutated patients (", obs_no_of_mutated_patients, ")")
+            effect_label <- ifelse(length(effects_to_keep) == 1 & effects_to_keep[1] == 'na',
+                                   effect_label,
+                                   paste0(effect_label, '\n', paste0(c("Included effects:", sapply(effects_to_keep, function(x) label_fun(x))), collapse = '\n')))
+            
+            obs_cumsum_mutated <- mutprobs_test_region_cohortdist.df %>% arrange(pmut) %>% mutate(i = row_number(), cumsum_mutated = cumsum(mutated))
+            
+            obs_cumsum_mutated %>%
+              mutate(test = 'test') %>% 
+              ggplot(aes(fill = test)) +
+              geom_ribbon(data = cumsum_mutated_quantiles, aes(x = i, ymin = `5%`, ymax = `95%`, fill="simcolor"), color="#AEC7E8") +
+              geom_line(aes(x = i, y = cumsum_mutated, color = "obscolor"))+
+              theme_classic() +
+              scale_x_continuous(expand = c(0, 0)) +
+              scale_y_continuous(expand = c(0, 0)) +
+              scale_fill_manual(name = '', values=c("simcolor"="#AEC7E8"), labels = c("simcolor"="5-95% simulations")) +
+              scale_color_manual(name = '', values = c("obscolor" = 'black'), labels = c("obscolor" =  effect_label)) +
+              ylab("Mutated patients (cumulative)") +
+              xlab('Patients ordered by mutation probability') +
+              ggtitle("Cohort distribution - cumulative mutated patients")
+              # theme(
+              #   axis.title.x = element_blank()
+              # )
+            
+          }
+          
+          p.cohort_dist_fit <- plot_cohort_dist_fit(fit.gamma, obs_val, p_val)
+          p.cohort_dist_cumsum <- plot_cohort_dist_cumsum(mutprobs_test_region_cohortdist.df, no_of_patients, obs_no_of_mutated_patients, config$effects_to_keep, config$no_of_simulations)
+          
+          
+          
         } else {
           # Output NA row if there was a problem getting the cohort dist scaling right.
           output.df <- tibble(
@@ -436,6 +523,194 @@ main <- function(){
     if(nrow(output.df) == 0){
       output.df <- output.df %>% bind_rows(tibble(test = NA, test_value = NA, rank = NA))
     }
+    
+    
+    
+    
+    
+    
+    
+    ################################
+    # Plotting here
+    
+    
+    plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, annotate_cds_effects, no_of_patients, p.cohort_dist_fit = NULL, p.cohort_dist_cumsum = NULL, highlight_position_min_muts = 3){
+      
+      no_of_bases <- test_regions.gr %>% filter(test_region == test_region_arg) %>% width() %>% sum()
+      if(annotate_cds_effects){
+        max_pos <- no_of_bases / 3
+        pos_y_lab <- 'Codon'
+      } else {
+        max_pos <- no_of_bases
+        pos_y_lab <- 'Base'
+      }
+      
+      
+      plot.df <- mutations_with_effects_for_plotting.df %>% 
+        filter(test_region == test_region_arg) %>% 
+        left_join(mutprobs_test_region.df %>% arrange(exp_mut_count) %>% mutate(i = row_number()), by = 'sampleID') %>% 
+        {if(annotate_cds_effects) mutate(., pos_no = codon_no) else mutate(., pos_no = base_no)}
+      
+      highlight_positions <- plot.df %>% 
+        count(pos_no) %>% 
+        filter(n >= highlight_position_min_muts)
+      
+      missense_color <- '#f59d47'
+      nonsense_color <- '#D62728'
+      synonymous_color <- '#4788b5'
+      na_color <- 'black'
+      
+      p <- plot.df %>% 
+        ggplot()
+      if(nrow(highlight_positions) > 0){
+        p <- p +
+          geom_hline(data= highlight_positions, aes(yintercept = pos_no), color = 'gray80')
+      }
+      p <- p +
+        geom_point(aes(x=i, y = pos_no, color = effect), size = 1) +
+        scale_x_continuous(limits = c(0, no_of_patients), expand = c(0, 0)) +
+        scale_y_continuous(limits = c(0, max_pos), expand = c(0, 0)) +
+        ylab(pos_y_lab) +
+        xlab('Patients ordered by mutation probability') +
+        ggtitle(paste('Mutation positions', ifelse(nrow(highlight_positions > 0), paste0('(n \u2265 ', highlight_position_min_muts,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), ' highlighted)'), ''))) +
+        theme_classic() +
+        scale_color_manual(name = 'Mutations by effect',
+                           values =  c(missense_color, nonsense_color, synonymous_color, na_color),
+                           breaks = c('m', 'n', 's', 'na')) +
+        theme(legend.position = 'none')
+
+      
+      if(nrow(highlight_positions) > 0){
+        p.highlighted_positions <- plot.df %>%
+          filter(pos_no %in% highlight_positions$pos_no) %>% 
+          count(pos_no, effect) %>% 
+          ggplot(aes(x=as.factor(pos_no), y = n, fill = effect)) +
+          geom_col(position = position_dodge2(width = 0.9, preserve = "single")) +
+          theme_classic() +
+          ylab("Mutations") +
+          xlab(pos_y_lab) +
+          ggtitle(paste0('Recurrent mutations\n(n \u2265 ',highlight_position_min_muts,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), ')')) +
+          scale_y_continuous(expand = c(0,0)) +
+          scale_fill_manual(values =  c(missense_color, nonsense_color, synonymous_color, na_color), breaks = c('m', 'n', 's', 'na')) +
+          theme(
+            legend.position = 'none'
+          ) +
+          coord_flip()
+      } else {
+        p.highlighted_positions <- NULL
+      }
+      
+      
+      effect_count <- plot.df %>% count(effect)
+      p.effect_separated_cumsum_muts <- plot.df %>% 
+        count(i, effect) %>%
+        bind_rows(expand_grid(effect = effect_count$effect,
+                              n = 0,
+                              i = 0 : no_of_patients)) %>% 
+        group_by(i, effect) %>% 
+        summarise(n = sum(n)) %>% 
+        group_by(effect) %>%
+        arrange(effect, i) %>%
+        mutate(cumsum_muts = cumsum(n), cumsum_mut_ratio = cumsum_muts / max(cumsum_muts)) %>% 
+        ggplot(aes(x = i, y = cumsum_mut_ratio, color = effect)) +
+        geom_line() +
+        theme_classic() +
+        ylab('Cumulative portion of mutations') +
+        xlab('Patients ordered by mutation probability') +
+        ggtitle('Cumulative mutated patients - separated by effect') +
+        scale_x_continuous(expand = c(0,0)) +
+        scale_y_continuous(breaks = c(0, 0.5, 1)) +
+        scale_color_manual(name = 'Mutations by effect',
+                           breaks = c('m', 'n','s', 'na'),
+                           labels = c(paste('Mismatch', ifelse('m' %in% effect_count$effect, paste0('(', filter(effect_count, effect == 'm')$n, ')'), '')),
+                                      paste('Nonsense', ifelse('n' %in% effect_count$effect, paste0('(', filter(effect_count, effect == 'n')$n, ')'), '')),
+                                      paste('Silent', ifelse('s' %in% effect_count$effect, paste0('(', filter(effect_count, effect == 's')$n, ')'), '')),
+                                      paste('Mutations', ifelse('na' %in% effect_count$effect, paste0('(', filter(effect_count, effect == 'na')$n, ')'), ''))),
+                           values = c(missense_color, nonsense_color, synonymous_color, na_color),
+                           guide = guide_legend(override.aes=list(size = 6)))
+
+      
+      if(!is.null(p.cohort_dist_cumsum) & !is.null(p.cohort_dist_fit)){
+        # If cohort dist plots exist, so 2 columns and 3 rows
+        p.grid <- plot_grid(
+          p.cohort_dist_cumsum,
+          p.effect_separated_cumsum_muts,
+          p,
+          p.cohort_dist_fit,
+          NULL,
+          p.highlighted_positions,
+          nrow = 3,
+          align = 'hv',
+          axis = 'lrtb',
+          byrow = FALSE,
+          rel_widths = c(2,1),
+          rel_heights = c(1,1,2))
+      } else if (nrow(highlight_positions) > 0){
+        # If no cohort dist plots, but there is a highlight plot, so still two columns, but only two rows
+        p.grid <- plot_grid(
+          p.effect_separated_cumsum_muts,
+          p,
+          NULL,
+          p.highlighted_positions,
+          nrow = 2,
+          align = 'hv',
+          axis = 'lrtb',
+          byrow = FALSE,
+          rel_widths = c(2,1),
+          rel_heights = c(1,2))
+      } else {
+        # If no cohort dist plots, and no highlight plot -> 1 column, 2 rows
+        p.grid <- plot_grid(
+          p.effect_separated_cumsum_muts,
+          p,
+          nrow = 2,
+          align = 'hv',
+          axis = 'lrtb',
+          byrow = FALSE,
+          rel_heights = c(1,2))
+      }
+      
+      
+      title <- ggdraw() + 
+        draw_label(
+          paste0(test_region_arg ,' (', cancer_arg, ')'),
+          fontface = 'bold',
+          x = 0.5,
+          hjust = 0.5
+        )
+      plot_grid(
+        title, p.grid,
+        ncol = 1,
+        # rel_heights values control vertical title margins
+        rel_heights = c(0.1, 1)
+      )
+      
+      
+      
+    }
+    
+
+    if(!exists('p.cohort_dist_fit') | !exists('p.cohort_dist_cumsum')){
+      p.cohort_dist_fit <- NULL
+      p.cohort_dist_cumsum <- NULL
+    }
+    plot_combined(current_test_region,
+                  config$cancer_type,
+                  test_regions.gr,
+                  config$annotate_cds_effects,
+                  no_of_patients,
+                  p.cohort_dist_fit,
+                  p.cohort_dist_cumsum)
+    
+    
+    
+    
+    get_codon_mutation <- function(seq){
+      codon_table.df <- make_codon_table()
+    }
+    
+    
+    
     
 
     
