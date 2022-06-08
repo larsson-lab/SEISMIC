@@ -434,7 +434,7 @@ main <- function(){
           # Plotting
           if(p_val < config$plotting_max_p){plot_this_test_region <- TRUE}
           if(plot_this_test_region){
-            p.cohort_dist_fit <- plot_cohort_dist_fit(fit.gamma, obs_val, p_val)
+            p.cohort_dist_fit <- plot_cohort_dist_fit(fit.gamma, test_value, p_val)
             p.cohort_dist_cumsum <- plot_cohort_dist_cumsum(mutprobs_test_region_cohortdist.df, no_of_patients, obs_no_of_mutated_patients, config$effects_to_keep, config$no_of_simulations)
           }
           
