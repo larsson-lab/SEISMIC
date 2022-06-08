@@ -34,7 +34,7 @@ main <- function(){
   
   genome <- load_bsgenome(config$reference_genome)
   fig_dir <- paste0(config$out_dir, '/figures/')
-  system(paste("mkdir -p", config$out_dir))
+  system(paste("mkdir -p", config$out_dir, fig_dir))
   
   cat("Loading regions\n")
   # Read all regions that should be tested, e.g. cds regions. Could also be promoters, etc.
