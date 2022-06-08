@@ -38,6 +38,13 @@ test_cohort_distribution_alone: TRUE # TRUE/FALSE. Run cohort distribution test.
 test_recurrence_alone: FALSE # TRUE/FALSE. Run test based on recurrence.
 test_combined_model: FALSE # TRUE/FALSE. Run test that evaluates both recurrence and cohort distribution.
 
+# Plotting
+plotting_max_p: 0.001 # Plot all regions with a P value in the cohort distribution test lower than this. Set to 0 to disable.
+# plot_region_list: # Manually chosen regions to generate plots for
+#   - "NRAS"
+#   - "TP53"
+plot_region_list_only: FALSE # Set to TRUE to only plot without outputting results, and only for regions in plot_region_list
+
 # Filtering test regions
 remove_overlapping_test_regions: FALSE # TRUE/FALSE. Removes genes that overlap each other at all if set to TRUE.
 min_mutations: 3 # Require mutations in at least this number of tumours in a gene to analyse it.
