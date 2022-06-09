@@ -478,14 +478,6 @@ main <- function(){
                     no_of_patients,
                     p.cohort_dist_fit,
                     p.cohort_dist_cumsum)
-      # ggsave(paste0(fig_dir,
-      #               config$out_base_name, "_",
-      #               sig_string,
-      #               config$cancer_type,
-      #               "_", current_test_region, ".pdf"),
-      #        plot = p.combined,
-      #        width = 15,
-      #        height = 15)
       pdf(file = paste0(fig_dir,
                         config$out_base_name, "_",
                         sig_string,
@@ -1420,6 +1412,21 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
     count(pos_no) %>% 
     filter(n >= highlight_position_min_muts)
   
+  if(nrow(highlight_positions) > 0){
+    max_pos_for_plot <- 10
+    if(nrow(highlight_positions) > max_pos_for_plot){
+      highlight_positions_filtered <- highlight_positions %>% 
+        arrange(-n) %>% 
+        head(n = max_pos_for_plot)
+      highlights_filtered_string1 <- paste0(' - top ', max_muts_for_plot, ' darker')
+      highlights_filtered_string2 <- paste0(' - top ', max_muts_for_plot)
+    } else {
+      highlight_positions_filtered <- highlight_positions
+      highlights_filtered_string1 <- ''
+      highlights_filtered_string2 <- ''
+    }
+  }
+  
   missense_color <- '#f59d47'
   nonsense_color <- '#D62728'
   synonymous_color <- '#4788b5'
@@ -1429,7 +1436,11 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
     ggplot()
   if(nrow(highlight_positions) > 0){
     p <- p +
-      geom_hline(data= highlight_positions, aes(yintercept = pos_no), color = 'gray80')
+      geom_hline(data= highlight_positions, aes(yintercept = pos_no), color = 'gray85')
+  }
+  if(nrow(highlight_positions_filtered) > 0){
+    p <- p +
+      geom_hline(data= highlight_positions_filtered, aes(yintercept = pos_no), color = 'gray50')
   }
   p <- p +
     geom_point(aes(x=i, y = pos_no, color = effect), size = 1) +
@@ -1437,7 +1448,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
     scale_y_continuous(limits = c(0, max_pos), expand = c(0, 0)) +
     ylab(pos_y_lab) +
     xlab('Patients ordered by mutation probability') +
-    ggtitle(paste('Mutation positions', ifelse(nrow(highlight_positions > 0), paste0('(n > ', highlight_position_min_muts - 1,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), ' highlighted)'), ''))) +
+    ggtitle(paste('Mutation positions', ifelse(nrow(highlight_positions > 0), paste0('(n > ', highlight_position_min_muts - 1,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), ' highlighted',highlights_filtered_string1,')'), ''))) +
     theme_classic() +
     scale_color_manual(name = 'Mutations by effect',
                        values =  c(missense_color, nonsense_color, synonymous_color, na_color),
@@ -1446,11 +1457,12 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
   
   
   if(nrow(highlight_positions) > 0){
+    
     if(annotate_cds_effects){
       genome <- load_bsgenome(assembly_arg)
       seq <- get_cds_seq(test_regions.gr, test_region_arg, genome)
       highlighted_pos_info.df <- plot.df %>%
-        filter(codon_no %in% highlight_positions$pos_no) %>%
+        filter(codon_no %in% highlight_positions_filtered$pos_no) %>%
         count(base_no, codon_no, refnuc, varnuc, strand, effect, pos_no) %>%
         mutate(region_strand = test_regions.gr %>% filter(test_region == test_region_arg) %>% strand() %>% as.character() %>% unique()) %>% 
         mutate(refnuc_coding = ifelse(strand == region_strand, refnuc, str_revcomp(refnuc)),
@@ -1472,7 +1484,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
       theme_classic() +
       ylab("Mutations") +
       xlab(pos_y_lab) +
-      ggtitle(paste0('Recurrent mutations\n(n > ', highlight_position_min_muts - 1,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), ')')) +
+      ggtitle(paste0('Recurrent mutations\n(n > ', highlight_position_min_muts - 1,' per ', ifelse(annotate_cds_effects, 'codon', 'base'), highlights_filtered_string2, ')')) +
       scale_y_continuous(expand = c(0,0), limits = c(0, max(highlighted_pos_info.df$n)*1.15)) +
       scale_fill_manual(values =  c(missense_color, nonsense_color, synonymous_color, na_color), breaks = c('m', 'n', 's', 'na')) +
       theme(
