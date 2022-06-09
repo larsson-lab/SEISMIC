@@ -203,8 +203,9 @@ main <- function(){
                       .inorder = FALSE,
                       .multicombine = TRUE,
                       .options.snow = opts,
-                      .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'data.table', 'stringi', 'inline', 'Rcpp'),
+                      .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'data.table', 'stringi', 'inline', 'Rcpp', 'cowplot'),
                       .export = ls(.GlobalEnv)) %dopar% {
+
                         
     current_test_region <- unique(test_region_mut_effects$test_region)
     
@@ -471,18 +472,30 @@ main <- function(){
                     current_test_region,
                     config$cancer_type,
                     test_regions.gr,
+                    mutations_with_effects_for_plotting.df,
+                    config$reference_genome,
                     config$annotate_cds_effects,
                     no_of_patients,
                     p.cohort_dist_fit,
                     p.cohort_dist_cumsum)
-      ggsave(paste0(fig_dir,
-                    config$out_base_name, "_",
-                    sig_string,
-                    config$cancer_type,
-                    "_", current_test_region, ".pdf"),
-             plot = p.combined,
-             width = 15,
-             height = 15)
+      # ggsave(paste0(fig_dir,
+      #               config$out_base_name, "_",
+      #               sig_string,
+      #               config$cancer_type,
+      #               "_", current_test_region, ".pdf"),
+      #        plot = p.combined,
+      #        width = 15,
+      #        height = 15)
+      pdf(file = paste0(fig_dir,
+                        config$out_base_name, "_",
+                        sig_string,
+                        config$cancer_type,
+                        "_", current_test_region, ".pdf"),
+          width = 15,
+          height = 15
+          )
+      print(p.combined)
+      dev.off()
     }
     
     
@@ -1386,7 +1399,7 @@ plot_cohort_dist_cumsum <- function(mutprobs_test_region_cohortdist.df, no_of_pa
 }
 
 
-plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, annotate_cds_effects, no_of_patients, p.cohort_dist_fit = NULL, p.cohort_dist_cumsum = NULL, highlight_position_min_muts = 3){
+plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutations_with_effects_for_plotting.df, assembly_arg, annotate_cds_effects, no_of_patients, p.cohort_dist_fit = NULL, p.cohort_dist_cumsum = NULL, highlight_position_min_muts = 3){
   
   no_of_bases <- test_regions.gr %>% filter(test_region == test_region_arg) %>% width() %>% sum()
   if(annotate_cds_effects){
@@ -1434,6 +1447,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, annotate
   
   if(nrow(highlight_positions) > 0){
     if(annotate_cds_effects){
+      genome <- load_bsgenome(assembly_arg)
       seq <- get_cds_seq(test_regions.gr, test_region_arg, genome)
       highlighted_pos_info.df <- plot.df %>%
         filter(codon_no %in% highlight_positions$pos_no) %>%
