@@ -1317,22 +1317,31 @@ sim_fixed_mutated_count <- function(no_of_patients, no_of_mutations, exp_mut_cou
 
 plot_cohort_dist_fit <- function(fit.gamma, obs_val, p_val){
   min_dist <- qgamma(0.01, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = T)
-  min_lim <- min(-obs_val, min_dist)*0.95
-  
   max_dist <- qgamma(0.01, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F)
-  max_lim <- max(-obs_val, max_dist)*1.05
+  
+  if(is.infinite(obs_val)){
+    min_lim <- min_dist*0.95
+    max_lim <- max_dist*1.05
+  } else {
+    min_lim <- min(-obs_val, min_dist)*0.95
+    max_lim <- max(-obs_val, max_dist)*1.05
+  }
   
   plot_max_y <- max(sapply(seq(min_dist, max_dist, by = (max_dist - min_dist) / 100),
                            function(x) dgamma(x, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"])))
   
-  tibble(negLogP = c(min_lim, max_lim)) %>% 
+  p <- tibble(negLogP = c(min_lim, max_lim)) %>% 
     ggplot(aes(x=-obs_val)) +
     stat_function(fun=dgamma, args=list(shape=fit.gamma$estimate["shape"], rate=fit.gamma$estimate["rate"]), aes(fill='simcolor'), geom = 'area', xlim = c(min_lim, max_lim)) +
-    geom_point(data = tibble(negLogP = obs_val), aes(y = 0)) +
-    xlab('-Log likelihood of cohort mutation distribution') +
-    geom_segment(x = -obs_val, y = plot_max_y*0.2, xend = -obs_val, yend = 0,
-                 arrow = arrow()) +
-    geom_text(x = -obs_val, y = plot_max_y * 0.3, label = paste0('Real cohort\nP = ', formatC(p_val, digits = 2)), hjust="inward") +
+    xlab('-Log likelihood of cohort mutation distribution')
+  if(!is.infinite(obs_val)){
+    p <- p + geom_segment(x = -obs_val, y = plot_max_y*0.2, xend = -obs_val, yend = 0, arrow = arrow()) +
+      geom_text(x = -obs_val, y = plot_max_y * 0.3, label = paste0('Real cohort\nP = ', formatC(p_val, digits = 2)), hjust="inward")
+  } else{
+    p <- p + geom_segment(x = max_lim - (max_lim - min_lim)*0.2, y = plot_max_y*0.1, xend = max_lim, yend = plot_max_y*0.1, arrow = arrow()) +
+      geom_text(x = max_lim, y = plot_max_y * 0.3, label = paste0('Real cohort\nP = ', formatC(p_val, digits = 2)), hjust="inward")
+  }
+  p <- p +
     scale_y_continuous(expand = c(0, 0)) +
     scale_fill_manual(name = '', values = c('simcolor' = '#AEC7E8'), labels = c('simcolor' = 'Simulations')) +
     ggtitle('Cohort distribution\ntest result') +
