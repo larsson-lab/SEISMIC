@@ -1427,13 +1427,16 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
       highlight_positions_filtered <- highlight_positions %>% 
         arrange(-n) %>% 
         head(n = max_pos_for_plot)
-      highlights_filtered_string1 <- paste0(' - top ', max_muts_for_plot, ' darker')
-      highlights_filtered_string2 <- paste0(' - top ', max_muts_for_plot)
+      highlights_filtered_string1 <- paste0(' - top ', max_pos_for_plot, ' darker')
+      highlights_filtered_string2 <- paste0(' - top ', max_pos_for_plot)
     } else {
       highlight_positions_filtered <- highlight_positions
       highlights_filtered_string1 <- ''
       highlights_filtered_string2 <- ''
     }
+  } else {
+    highlights_filtered_string1 <- ''
+    highlights_filtered_string2 <- ''
   }
   
   missense_color <- '#f59d47'
@@ -1447,7 +1450,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
     p <- p +
       geom_hline(data= highlight_positions, aes(yintercept = pos_no), color = 'gray85')
   }
-  if(nrow(highlight_positions_filtered) > 0){
+  if(nrow(highlight_positions_filtered) != nrow(highlight_positions)){
     p <- p +
       geom_hline(data= highlight_positions_filtered, aes(yintercept = pos_no), color = 'gray50')
   }
