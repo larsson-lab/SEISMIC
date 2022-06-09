@@ -1,4 +1,4 @@
-<img src="media/SEISMIC_logo.png" width="300" /> <!-- Change this to a raw.github link after making the repo public to avoid broken links if the README is hosted without the logo file in places other than GitHub. -->
+<img src="https://github.com/larsson-lab/SEISMIC/raw/main/media/SEISMIC_logo.png" width="300" /> <!-- Change this to a raw.github link after making the repo public to avoid broken links if the README is hosted without the logo file in places other than GitHub. -->
 
 ## Selection Evidence Inferred from Sample-specific Modelling In Cancer
 
@@ -18,6 +18,7 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 - `data.table` (1.14.2)
 - `plyranges` (1.14.0)
 - `BSgenome.Hsapiens.UCSC.hg19` (1.4.3) and/or `BSgenome.Hsapiens.UCSC.hg38` (1.4.4)
+- `cowplot` (1.1.1)
 
 
 ## Installation
