@@ -206,309 +206,331 @@ main <- function(){
                       .packages = c('fitdistrplus', 'tidyverse', 'plyranges', 'data.table', 'stringi', 'inline', 'Rcpp', 'cowplot'),
                       .export = ls(.GlobalEnv)) %dopar% {
 
-                        
     current_test_region <- unique(test_region_mut_effects$test_region)
     
-    plot_this_test_region <- current_test_region %in% config$plot_region_list
     
-    
-    test_region_mut_effects.gr <- test_region_mut_effects %>% as_granges()
-    
-    # Get trinuc info in test region.
-    # For each base, get the trinuc, and include the effect of the 3 possible mutations
-    test_region_mut_effects_tidy.df <- test_region_mut_effects.gr %>%
-      as_tibble() %>%
-      select(trinuc = ref_trinuc, C, A, G, T, base_no) %>%
-      pivot_longer(-c(trinuc, base_no), names_to = "varnuc", values_to = "effect") %>% 
-      filter(effect != "u") # 'u' refers to unchanged, e.g., A>A "mutation"
-    
-    
-    
-    # Negligible performance difference from defining the function inside the loop, and easier to read.
-    calc_mutprobs_per_base <- function(test_region_mut_effects_tidy.df, combined_mutfreqs.df, effects_to_keep = NULL){
-      # Further filter to effects included in config$effects_to_keep
-      # Most common example: keep only non-silent mutations in a gene
-      test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df <- test_region_mut_effects_tidy.df %>% 
-        { if(is.null(effects_to_keep)) . else filter(., effect %in% effects_to_keep) } %>% 
-        group_by(trinuc, base_no) %>%
-        arrange(varnuc) %>%
-        summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
+    # tryCatch the whole loop so that we can log any regions that encountered errors, instead of failing silently.
+    tryCatch({ 
       
-      # Get probability of mutation at each base in the test region
-      mutprobs_per_base.df <- test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df %>%
-        inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
-        select(sampleID, pmut = mutfreq)
-      
-      mutprobs_per_base.df
-    }
-    
-    mutprobs_per_base.df <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df, config$effects_to_keep)
-    
-
-    
-    # Filter mutations to only look at those overlapping the test regions (e.g., the CDSs in a gene)
-    mutations.df <- effect_filtered_mutations.gr %>% 
-      filter_by_overlaps(
-        test_region_mut_effects.gr %>% GenomicRanges::reduce() # Reduce probably unnecessary to perform manually.
-        ) %>% 
-      as_tibble()
-    
-    
-
-    # Take each mutation in a each gene and make a tibble with that info as binary "mutated" status
-    donor_mutated.df <- mutations.df %>% 
-      group_by(sampleID) %>% 
-      summarise(mutated = sign(dplyr::n()), .groups = 'drop')
-    
-    
-    
-    
-    # Set scaling factor. For the cohort_dist results, i.e. when not taking recurrence into account, scaling here is irrelevant.
-    if(scale_with_regression){
-      # Have to redo the probability of mutation at each base to include all mutations (not filtering e.g. silent)
-      # when calculating the expected number of mutations, as the observed mutation rate in reglist includes all mutations.
-      no_of_exp_mutations <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df) %>%
-        pull(pmut) %>%
-        sum()
-      
-      test_region_mutrate <- reglist$test_region_mutrate %>% filter(test_region == current_test_region)
-      new_no_of_exp_mutations <- predict(reglist$lm, test_region_mutrate) * test_region_mutrate$length
-      scaling_factor <- new_no_of_exp_mutations / no_of_exp_mutations
-    } else if(scale_silent_muts){
-      scaling_factor <- filter(obs_exp_mut_count.df, test_region == current_test_region)$obs_exp_silent_ratio
-    } else {
-      scaling_factor <- 1
-    }
-    # Mustn't set mutation probabilities negative, so abort loop iteration if scaling_factor<0
-    if(scaling_factor < 0){
-      # I would like a next statement here, but that doesn't seem to work with foreach. Therefore returning empty row.
-      return(tibble(test=character(),
-                    test_value=double(),
-                    rank=double(),
-                    region=character(),
-                    obs_mutated_count=double(),
-                    exp_mutated_count=double(),
-                    scaling_factor=double()))
-    }
-    
-    # Calculate the likelihood of any mutations (with the right effect) in the test region per patient,
-    # scaling probabilities if so configured. Also add mutated status.
-    mutprobs_test_region.df <- mutprobs_per_base.df %>%
-      group_by(sampleID) %>% 
-      summarise(exp_mut_count = sum(pmut * scaling_factor), pmut = 1 - prod(1 - pmut*scaling_factor), .groups = 'drop') %>% # 
-      left_join(donor_mutated.df, by = "sampleID") %>% 
-      replace_na(list(mutated = 0)) %>% 
-      mutate(p_no_mut = 1 - pmut) %>%
-      arrange(pmut)
-    
-    obs_no_of_mutated_patients <- mutprobs_test_region.df$mutated %>% sum()
-    
-    output.df <- tibble()
-    if(config$test_recurrence_alone || config$test_combined_model){
-      
-      # We can use the same simulations for testing with only recurrence, and with the combined model
-      sim_test_values <- sapply(1:config$no_of_simulations, function(x) sim_recurrence_and_combined_test_values(no_of_patients, mutprobs_test_region.df$pmut))
+      plot_this_test_region <- current_test_region %in% config$plot_region_list
       
       
-      if(config$test_recurrence_alone){
+      test_region_mut_effects.gr <- test_region_mut_effects %>% as_granges()
+      
+      # Get trinuc info in test region.
+      # For each base, get the trinuc, and include the effect of the 3 possible mutations
+      test_region_mut_effects_tidy.df <- test_region_mut_effects.gr %>%
+        as_tibble() %>%
+        select(trinuc = ref_trinuc, C, A, G, T, base_no) %>%
+        pivot_longer(-c(trinuc, base_no), names_to = "varnuc", values_to = "effect") %>% 
+        filter(effect != "u") # 'u' refers to unchanged, e.g., A>A "mutation"
+      
+      
+      
+      # Negligible performance difference from defining the function inside the loop, and easier to read.
+      calc_mutprobs_per_base <- function(test_region_mut_effects_tidy.df, combined_mutfreqs.df, effects_to_keep = NULL){
+        # Further filter to effects included in config$effects_to_keep
+        # Most common example: keep only non-silent mutations in a gene
+        test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df <- test_region_mut_effects_tidy.df %>% 
+          { if(is.null(effects_to_keep)) . else filter(., effect %in% effects_to_keep) } %>% 
+          group_by(trinuc, base_no) %>%
+          arrange(varnuc) %>%
+          summarise(combined_muttype = paste0(varnuc, collapse = ''), .groups = 'drop')
         
-        # This is needed for the gamma distribution fit, since 0 is not allowed.
-        # Can't be something really small like 10^-6 as that skews the distribution a lot, but 1 seems good.
-        extra_mut <- 1
+        # Get probability of mutation at each base in the test region
+        mutprobs_per_base.df <- test_region_mut_effects_tidy_effect_filtered_combined_varnucs.df %>%
+          inner_join(combined_mutfreqs.df, by = c('trinuc', 'combined_muttype')) %>% 
+          select(sampleID, pmut = mutfreq)
         
-        fit.gamma <- fitdist(sim_test_values[1,] + extra_mut, distr = "gamma", method = "mle", lower = 0)
-        
-        output.df <- tibble(scaling_factor = scaling_factor,
-                            expected_mutated_after_cohortdist_scaling = NA,
-                            test_value = obs_no_of_mutated_patients,
-                            rank = NA,
-                            p = pgamma(obs_no_of_mutated_patients + extra_mut, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F),
-                            test = "recurrence") %>% 
-          bind_rows(output.df)
-        
-        
-        
-        
-        
-        
+        mutprobs_per_base.df
       }
       
-      if(config$test_combined_model){
-
+      mutprobs_per_base.df <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df, config$effects_to_keep)
+      
+  
+      
+      # Filter mutations to only look at those overlapping the test regions (e.g., the CDSs in a gene)
+      mutations.df <- effect_filtered_mutations.gr %>% 
+        filter_by_overlaps(
+          test_region_mut_effects.gr %>% GenomicRanges::reduce() # Reduce probably unnecessary to perform manually.
+          ) %>% 
+        as_tibble()
+      
+      
+  
+      # Take each mutation in a each gene and make a tibble with that info as binary "mutated" status
+      donor_mutated.df <- mutations.df %>% 
+        group_by(sampleID) %>% 
+        summarise(mutated = sign(dplyr::n()), .groups = 'drop')
+      
+      
+      
+      
+      # Set scaling factor. For the cohort_dist results, i.e. when not taking recurrence into account, scaling here is irrelevant.
+      if(scale_with_regression){
+        # Have to redo the probability of mutation at each base to include all mutations (not filtering e.g. silent)
+        # when calculating the expected number of mutations, as the observed mutation rate in reglist includes all mutations.
+        no_of_exp_mutations <- calc_mutprobs_per_base(test_region_mut_effects_tidy.df, combined_mutfreqs.df) %>%
+          pull(pmut) %>%
+          sum()
         
-        test_value <- cohort_outcome_prob(mutprobs_test_region.df$p_no_mut, mutprobs_test_region.df$mutated)
-        rank <- test_value %>% get_obs_rank(sim_test_values[2,])
-        
-        output.df <- tibble(scaling_factor = scaling_factor,
-                            expected_mutated_after_cohortdist_scaling = NA,
-                            test_value = test_value,
-                            rank = rank,
-                            p = rank / (config$no_of_simulations + 1),
-                            test = "combined"
-                            ) %>% 
-          bind_rows(output.df)
-        
+        test_region_mutrate <- reglist$test_region_mutrate %>% filter(test_region == current_test_region)
+        new_no_of_exp_mutations <- predict(reglist$lm, test_region_mutrate) * test_region_mutrate$length
+        scaling_factor <- new_no_of_exp_mutations / no_of_exp_mutations
+      } else if(scale_silent_muts){
+        scaling_factor <- filter(obs_exp_mut_count.df, test_region == current_test_region)$obs_exp_silent_ratio
+      } else {
+        scaling_factor <- 1
+      }
+      # Mustn't set mutation probabilities negative, so abort loop iteration if scaling_factor<0
+      if(scaling_factor < 0){
+        # I would like a next statement here, but that doesn't seem to work with foreach. Therefore returning empty row.
+        return(tibble(test=character(),
+                      test_value=double(),
+                      rank=double(),
+                      region=character(),
+                      obs_mutated_count=double(),
+                      exp_mutated_count=double(),
+                      scaling_factor=double()))
       }
       
-      
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    # This is the method that tests only for which patients have mutations, while ignoring recurrence
-    if(config$test_cohort_distribution_alone){
-
-      # To help optimize() find the scaling factor that gets exp_mutated = obs_mutated, we start by estimating what the factor should be, ignoring the non-linearity of the relationship between p(mutated) and exp_no_of_mutations
-      orig_exp_no_of_mutated_patients <- mutprobs_per_base.df %>%
+      # Calculate the likelihood of any mutations (with the right effect) in the test region per patient,
+      # scaling probabilities if so configured. Also add mutated status.
+      mutprobs_test_region.df <- mutprobs_per_base.df %>%
         group_by(sampleID) %>% 
-        summarise(pmut = 1 - prod(1 - pmut)) %>%
-        pull(pmut) %>%
-        sum()
-      naive_scaling_factor <- obs_no_of_mutated_patients / orig_exp_no_of_mutated_patients
-
-      # Try to find a scaling value where the expected number of MUTATED tumours is the same as what's observed.
-      scaling_factor_cohortdist <- optimize(function(x) calc_exp_mutated_with_scaling(x, mutprobs_per_base.df, obs_no_of_mutated_patients), interval = c(0, naive_scaling_factor * 10), tol = 0.01)$minimum
-      
-      
-      
-      mutprobs_test_region_cohortdist.df <- mutprobs_per_base.df %>%
-        group_by(sampleID) %>% 
-        summarise(exp_mut_count = sum(pmut * scaling_factor_cohortdist), pmut = 1 - prod(1 - pmut*scaling_factor_cohortdist), .groups = 'drop') %>% # 
+        summarise(exp_mut_count = sum(pmut * scaling_factor), pmut = 1 - prod(1 - pmut*scaling_factor), .groups = 'drop') %>% # 
         left_join(donor_mutated.df, by = "sampleID") %>% 
         replace_na(list(mutated = 0)) %>% 
         mutate(p_no_mut = 1 - pmut) %>%
         arrange(pmut)
       
+      obs_no_of_mutated_patients <- mutprobs_test_region.df$mutated %>% sum()
       
-      expected_after_cohortdist_scaling <- sum(mutprobs_test_region_cohortdist.df$pmut)
-      
-      cohort_dist_scaling_ok <- TRUE
-      if(abs(obs_no_of_mutated_patients - expected_after_cohortdist_scaling) > 1){
-        cat("Cohort dist optimize scaling yields difference between observed and expected mutated patients of ",
-            obs_no_of_mutated_patients - expected_after_cohortdist_scaling,
-            " for ",
-            current_test_region,
-            ". Investigate whether the optimize function is finding the right scaling factor. \n")
-        cohort_dist_scaling_ok <- FALSE
-      }
-      
-
-      # With 0 mutations, the result will always be the same, so no point in running simulations. Faster to just output the answer (p -> 0.5 as no_of_sims -> Inf)
-      # Normally, the tool should not be analysing genes with 0 mutations, but it could happen during troubleshooting, for instance.
-      if(obs_no_of_mutated_patients == 0){
-        output.df <- tibble(
-          test_value = cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated),
-          scaling_factor = scaling_factor_cohortdist,
-          rank = config$no_of_simulations / 2 + 1,
-          test = "cohort_dist") %>%
-          bind_rows(output.df)
-      } else {
+      output.df <- tibble()
+      if(config$test_recurrence_alone || config$test_combined_model){
         
-        if(cohort_dist_scaling_ok){
-          test_value <- cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated)
+        # We can use the same simulations for testing with only recurrence, and with the combined model
+        sim_test_values <- sapply(1:config$no_of_simulations, function(x) sim_recurrence_and_combined_test_values(no_of_patients, mutprobs_test_region.df$pmut))
+        
+        
+        if(config$test_recurrence_alone){
           
-          # This doesn't work well for very low mutated counts, particularly just 1 (since that's not unimodal at all). Even 2 seems fine though.
-          invisible(capture.output(
-          fit.gamma <- fitdist(-sapply(1:config$no_of_simulations,
-                                      function(x) cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut,
-                                                                      sim_fixed_mutated_count2(no_of_patients, obs_no_of_mutated_patients, mutprobs_test_region_cohortdist.df$exp_mut_count))),
-                               distr = "gamma",
-                               method = "mle")
-          ))
-       
-          p_val <- pgamma(-test_value, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F)
-          output.df <- tibble(
-            test_value = test_value,
-            scaling_factor = scaling_factor_cohortdist,
-            expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
-            rank = NA,
-            p = p_val,
-            test = "cohort_dist") %>%
+          # This is needed for the gamma distribution fit, since 0 is not allowed.
+          # Can't be something really small like 10^-6 as that skews the distribution a lot, but 1 seems good.
+          extra_mut <- 1
+          
+          fit.gamma <- fitdist(sim_test_values[1,] + extra_mut, distr = "gamma", method = "mle", lower = 0)
+          
+          output.df <- tibble(scaling_factor = scaling_factor,
+                              expected_mutated_after_cohortdist_scaling = NA,
+                              test_value = obs_no_of_mutated_patients,
+                              rank = NA,
+                              p = pgamma(obs_no_of_mutated_patients + extra_mut, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F),
+                              test = "recurrence") %>% 
             bind_rows(output.df)
           
-          # Plotting
-          if(p_val < config$plotting_max_p){plot_this_test_region <- TRUE}
-          if(plot_this_test_region){
-            p.cohort_dist_fit <- plot_cohort_dist_fit(fit.gamma, test_value, p_val)
-            p.cohort_dist_cumsum <- plot_cohort_dist_cumsum(mutprobs_test_region_cohortdist.df, no_of_patients, obs_no_of_mutated_patients, config$effects_to_keep, config$no_of_simulations)
-          }
           
           
-        } else {
-          # Output NA row if there was a problem getting the cohort dist scaling right.
-          output.df <- tibble(
-            test_value = NA,
-            scaling_factor = scaling_factor_cohortdist,
-            expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
-            rank = NA,
-            p = NA,
-            test = "cohort_dist") %>%
-            bind_rows(output.df)
+          
+          
+          
         }
+        
+        if(config$test_combined_model){
+  
+          
+          test_value <- cohort_outcome_prob(mutprobs_test_region.df$p_no_mut, mutprobs_test_region.df$mutated)
+          rank <- test_value %>% get_obs_rank(sim_test_values[2,])
+          
+          output.df <- tibble(scaling_factor = scaling_factor,
+                              expected_mutated_after_cohortdist_scaling = NA,
+                              test_value = test_value,
+                              rank = rank,
+                              p = rank / (config$no_of_simulations + 1),
+                              test = "combined"
+                              ) %>% 
+            bind_rows(output.df)
+          
+        }
+        
+        
       }
       
-    }
-
-    # If no tests were performed, output dummy row so that we can get obs/exp values etc without running simulations
-    if(nrow(output.df) == 0){
-      output.df <- output.df %>% bind_rows(tibble(test = NA, test_value = NA, rank = NA))
-    }
-    
-    
-
-    # Plotting
-    if(plot_this_test_region){
-      if(!exists('p.cohort_dist_fit') | !exists('p.cohort_dist_cumsum')){
-        p.cohort_dist_fit <- NULL
-        p.cohort_dist_cumsum <- NULL
+      
+      
+      
+      
+      
+      
+      
+      
+      # This is the method that tests only for which patients have mutations, while ignoring recurrence
+      if(config$test_cohort_distribution_alone){
+  
+        # To help optimize() find the scaling factor that gets exp_mutated = obs_mutated, we start by estimating what the factor should be, ignoring the non-linearity of the relationship between p(mutated) and exp_no_of_mutations
+        orig_exp_no_of_mutated_patients <- mutprobs_per_base.df %>%
+          group_by(sampleID) %>% 
+          summarise(pmut = 1 - prod(1 - pmut)) %>%
+          pull(pmut) %>%
+          sum()
+        naive_scaling_factor <- obs_no_of_mutated_patients / orig_exp_no_of_mutated_patients
+  
+        # Try to find a scaling value where the expected number of MUTATED tumours is the same as what's observed.
+        scaling_factor_cohortdist <- optimize(function(x) calc_exp_mutated_with_scaling(x, mutprobs_per_base.df, obs_no_of_mutated_patients), interval = c(0, naive_scaling_factor * 10), tol = 0.01)$minimum
+        
+        
+        
+        mutprobs_test_region_cohortdist.df <- mutprobs_per_base.df %>%
+          group_by(sampleID) %>% 
+          summarise(exp_mut_count = sum(pmut * scaling_factor_cohortdist), pmut = 1 - prod(1 - pmut*scaling_factor_cohortdist), .groups = 'drop') %>% # 
+          left_join(donor_mutated.df, by = "sampleID") %>% 
+          replace_na(list(mutated = 0)) %>% 
+          mutate(p_no_mut = 1 - pmut) %>%
+          arrange(pmut)
+        
+        
+        expected_after_cohortdist_scaling <- sum(mutprobs_test_region_cohortdist.df$pmut)
+        
+        cohort_dist_scaling_ok <- TRUE
+        if(abs(obs_no_of_mutated_patients - expected_after_cohortdist_scaling) > 1){
+          cat("Cohort dist optimize scaling yields difference between observed and expected mutated patients of ",
+              obs_no_of_mutated_patients - expected_after_cohortdist_scaling,
+              " for ",
+              current_test_region,
+              ". Investigate whether the optimize function is finding the right scaling factor. \n")
+          cohort_dist_scaling_ok <- FALSE
+        }
+        
+  
+        # With 0 mutations, the result will always be the same, so no point in running simulations. Faster to just output the answer (p -> 0.5 as no_of_sims -> Inf)
+        # Normally, the tool should not be analysing genes with 0 mutations, but it could happen during troubleshooting, for instance.
+        if(obs_no_of_mutated_patients == 0){
+          output.df <- tibble(
+            test_value = cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated),
+            scaling_factor = scaling_factor_cohortdist,
+            rank = config$no_of_simulations / 2 + 1,
+            test = "cohort_dist") %>%
+            bind_rows(output.df)
+        } else {
+          
+          if(cohort_dist_scaling_ok){
+            test_value <- cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut, mutprobs_test_region_cohortdist.df$mutated)
+            
+            # This doesn't work well for very low mutated counts, particularly just 1 (since that's not unimodal at all). Even 2 seems fine though.
+            invisible(capture.output(
+            fit.gamma <- fitdist(-sapply(1:config$no_of_simulations,
+                                        function(x) cohort_outcome_prob(mutprobs_test_region_cohortdist.df$p_no_mut,
+                                                                        sim_fixed_mutated_count2(no_of_patients, obs_no_of_mutated_patients, mutprobs_test_region_cohortdist.df$exp_mut_count))),
+                                 distr = "gamma",
+                                 method = "mle")
+            ))
+         
+            p_val <- pgamma(-test_value, shape = fit.gamma$estimate["shape"], rate = fit.gamma$estimate["rate"], lower.tail = F)
+            output.df <- tibble(
+              test_value = test_value,
+              scaling_factor = scaling_factor_cohortdist,
+              expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
+              rank = NA,
+              p = p_val,
+              test = "cohort_dist") %>%
+              bind_rows(output.df)
+            
+            # Plotting
+            # If there is an error in the plotting, catch it so that only the plot and not the whole region result is affected.
+            e <- tryCatch({
+              if(p_val < config$plotting_max_p){plot_this_test_region <- TRUE}
+              if(plot_this_test_region){
+                p.cohort_dist_fit <- plot_cohort_dist_fit(fit.gamma, test_value, p_val)
+                p.cohort_dist_cumsum <- plot_cohort_dist_cumsum(mutprobs_test_region_cohortdist.df, no_of_patients, obs_no_of_mutated_patients, config$effects_to_keep, config$no_of_simulations)
+              }
+            }, error = function(e) return())
+            
+          } else {
+            # Output NA row if there was a problem getting the cohort dist scaling right.
+            output.df <- tibble(
+              test_value = NA,
+              scaling_factor = scaling_factor_cohortdist,
+              expected_mutated_after_cohortdist_scaling = expected_after_cohortdist_scaling,
+              rank = NA,
+              p = NA,
+              test = "cohort_dist") %>%
+              bind_rows(output.df)
+          }
+        }
+        
       }
-      p.combined <- plot_combined(
-                    current_test_region,
-                    config$cancer_type,
-                    test_regions.gr,
-                    mutations_with_effects_for_plotting.df,
-                    config$reference_genome,
-                    config$annotate_cds_effects,
-                    no_of_patients,
-                    p.cohort_dist_fit,
-                    p.cohort_dist_cumsum)
-      pdf(file = paste0(fig_dir,
-                        config$out_base_name, "_",
-                        sig_string,
+  
+      # If no tests were performed, output dummy row so that we can get obs/exp values etc without running simulations
+      if(nrow(output.df) == 0){
+        output.df <- output.df %>% bind_rows(tibble(test = NA, test_value = NA, rank = NA))
+      }
+      
+      
+  
+      # Plotting
+      if(plot_this_test_region){
+        # If there is an error in the plotting, catch it so that only the plot and not the whole region result is affected.
+        e <- tryCatch({
+          if(!exists('p.cohort_dist_fit') | !exists('p.cohort_dist_cumsum')){
+            p.cohort_dist_fit <- NULL
+            p.cohort_dist_cumsum <- NULL
+          }
+          p.combined <- plot_combined(
+                        current_test_region,
                         config$cancer_type,
-                        "_", current_test_region, ".pdf"),
-          width = 15,
-          height = 15
-          )
-      print(p.combined)
-      dev.off()
-    }
-    
-    
-    
-    if(regular_output_mode){
-      output.df %>%
-        mutate(region = current_test_region,
-               obs_mutated_count = obs_no_of_mutated_patients,
-               exp_mutated_count = sum(mutprobs_test_region.df$pmut))
-    } else {
-      # This bit is used to look at patients' mutated status/mutations count, exp mut count and p_mutated for the cohort dist method
-      mutprobs_test_region_cohortdist.df %>%
-        left_join(mutations.df %>% count(sampleID, name = 'mutations')) %>%
-        replace_na(list(mutations = 0)) %>%
-        mutate(gene = current_test_region)
-    }
+                        test_regions.gr,
+                        mutations_with_effects_for_plotting.df,
+                        config$reference_genome,
+                        config$annotate_cds_effects,
+                        no_of_patients,
+                        p.cohort_dist_fit,
+                        p.cohort_dist_cumsum)
+          pdf(file = paste0(fig_dir,
+                            config$out_base_name, "_",
+                            sig_string,
+                            config$cancer_type,
+                            "_", current_test_region, ".pdf"),
+              width = 15,
+              height = 15
+              )
+          print(p.combined)
+          dev.off()
+        }, error = function(e) return())
+      }
+      
+      
+      
+      if(regular_output_mode){
+        output.df %>%
+          mutate(region = current_test_region,
+                 obs_mutated_count = obs_no_of_mutated_patients,
+                 exp_mutated_count = sum(mutprobs_test_region.df$pmut))
+      } else {
+        # This bit is used to look at patients' mutated status/mutations count, exp mut count and p_mutated for the cohort dist method
+        mutprobs_test_region_cohortdist.df %>%
+          left_join(mutations.df %>% count(sampleID, name = 'mutations')) %>%
+          replace_na(list(mutations = 0)) %>%
+          mutate(gene = current_test_region)
+      }
+      
+      
+    # If anything goes wrong inside the loop, return an ERROR row so that we know. 
+    }, error = function(e) tibble(region = current_test_region, test = "ERROR"))  
     
   }
   # End of loop
   stopCluster(cl)
   cat("\n") # Just to get a newline after the progress bar.
+  
+  
+  if("ERROR" %in% ranks.df$test){
+    cat('Errors were encountered in the following regions (the relevant results will be missing):\n')
+    error_regions <- ranks.df %>% 
+      filter(test == 'ERROR') %>% 
+      pull(region) %>% 
+      unique()
+    cat(paste0('  ', error_regions), sep = '\n')
+  }
   
   ##################################
   # Output
