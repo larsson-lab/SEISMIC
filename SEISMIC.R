@@ -484,7 +484,8 @@ main <- function(){
                         config$annotate_cds_effects,
                         no_of_patients,
                         p.cohort_dist_fit,
-                        p.cohort_dist_cumsum)
+                        p.cohort_dist_cumsum,
+                        highlight_position_min_muts = 2)
           pdf(file = paste0(fig_dir,
                             config$out_base_name, "_",
                             sig_string,
@@ -1272,9 +1273,11 @@ filter_test_regions_by_mut_count <- function(test_region_list, mutations.gr, min
   if(min_mutations > 0){
     regions_to_keep <- mutations.gr %>% 
       as_tibble() %>% 
-      count(test_region, name = "effect_filtered_mutations") %>% 
-      filter(effect_filtered_mutations >= min_mutations) %>%
-      .$test_region
+      select(test_region, sampleID) %>% 
+      unique() %>% 
+      count(test_region) %>% 
+      filter(n >= min_mutations) %>%
+      pull(test_region)
     
     return(test_region_list[test_region_list %in% regions_to_keep])
   } else {
@@ -1422,7 +1425,7 @@ plot_cohort_dist_cumsum <- function(mutprobs_test_region_cohortdist.df, no_of_pa
 }
 
 
-plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutations_with_effects_for_plotting.df, assembly_arg, annotate_cds_effects, no_of_patients, p.cohort_dist_fit = NULL, p.cohort_dist_cumsum = NULL, highlight_position_min_muts = 3){
+plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutations_with_effects_for_plotting.df, assembly_arg, annotate_cds_effects, no_of_patients, p.cohort_dist_fit = NULL, p.cohort_dist_cumsum = NULL, highlight_position_min_muts){
   
   no_of_bases <- test_regions.gr %>% filter(test_region == test_region_arg) %>% width() %>% sum()
   if(annotate_cds_effects){
@@ -1471,10 +1474,10 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
   if(nrow(highlight_positions) > 0){
     p <- p +
       geom_hline(data= highlight_positions, aes(yintercept = pos_no), color = 'gray85')
-  }
-  if(nrow(highlight_positions_filtered) != nrow(highlight_positions)){
-    p <- p +
-      geom_hline(data= highlight_positions_filtered, aes(yintercept = pos_no), color = 'gray50')
+    if(nrow(highlight_positions_filtered) != nrow(highlight_positions)){
+      p <- p +
+        geom_hline(data= highlight_positions_filtered, aes(yintercept = pos_no), color = 'gray50')
+    }
   }
   p <- p +
     geom_point(aes(x=i, y = pos_no, color = effect), size = 1) +
