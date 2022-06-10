@@ -1506,7 +1506,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
         group_by(label, effect, pos_no) %>%
         summarise(n = sum(n), .groups = 'drop')
     } else {
-      highlighted_pos_info.df <- plot.df %>% filter(base_no %in% highlight_positions$pos_no) %>% mutate(label = paste0(refnuc, base_no, varnuc))
+      highlighted_pos_info.df <- plot.df %>% filter(base_no %in% highlight_positions$pos_no) %>% count(refnuc, base_no, pos_no, varnuc, effect) %>% mutate(label = paste0(refnuc, base_no, varnuc))
     }
     
     p.highlighted_positions <- highlighted_pos_info.df %>% 
@@ -1548,7 +1548,7 @@ plot_combined <- function(test_region_arg, cancer_arg, test_regions.gr, mutation
     theme_classic() +
     ylab('Cumulative portion of mutations') +
     xlab('Patients ordered by mutation probability') +
-    ggtitle('Cumulative mutated patients - separated by effect') +
+    ggtitle('Cumulative mutations - separated by effect') +
     scale_x_continuous(expand = c(0,0)) +
     scale_y_continuous(breaks = c(0, 0.5, 1)) +
     scale_color_manual(name = 'Mutations by effect',
