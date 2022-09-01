@@ -365,7 +365,7 @@ main <- function(){
       
       
       # This is the method that tests only for which patients have mutations, while ignoring recurrence
-      if(config$test_cohort_distribution_alone){
+      if(config$test_cohort_skew_alone){
   
         # To help optimize() find the scaling factor that gets exp_mutated = obs_mutated, we start by estimating what the factor should be, ignoring the non-linearity of the relationship between p(mutated) and exp_no_of_mutations
         orig_exp_no_of_mutated_patients <- mutprobs_per_base.df %>%
@@ -537,8 +537,19 @@ main <- function(){
   # Output
   ##################################
   if(!config$plot_region_list_only){
+    col_rename <- c(mutated_tumours = 'obs_mutated_count',
+                    exp_mutated_tumours = 'exp_mutated_count',
+                    p.cohort_skew = 'p.cohort_dist',
+                    fdr.cohort_skew = 'fdr.cohort_dist',
+                    p.skew_and_recurrence = 'p.combined',
+                    fdr.skew_and_recurrence = 'fdr.combined')
     ranks.df %>%
-    arrange(test, p) %>%
+      arrange(test, p) %>%
+      group_by(test) %>% 
+      mutate(fdr = p.adjust(p, method = 'fdr')) %>% 
+      select(region, test, p, fdr, obs_mutated_count, exp_mutated_count) %>% 
+      pivot_wider(names_from = test, values_from = c(p, fdr), names_sep = ".") %>% 
+      dplyr::rename(any_of(col_rename)) %>% 
       write_tsv(paste0(config$out_dir,
                        config$out_base_name, "_",
                        scaling_string,

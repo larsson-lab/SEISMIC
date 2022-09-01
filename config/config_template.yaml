@@ -19,7 +19,7 @@ effects_to_keep: # Include mutations with these effects in analysis. Only used i
   - "n"
 
 # WXS-specific scaling
-# The scaling options have no impact when not running tests with recurrence, as the cohort distribution method ignores recurrence.
+# The scaling options have no impact when not running tests with recurrence, as the cohort mutational skew method ignores recurrence.
 scale_exp_to_repl_reg: FALSE # TRUE/FALSE. Scale mutation expectations using replication timing data.
 scale_exp_to_expr_reg: FALSE # TRUE/FALSE. Scale mutation expectations using expression data.
 min_test_region_length_for_regression: 5000 # Minimum length of a gene to perform scaling with replication timing or expression data.
@@ -27,19 +27,19 @@ wxs_covered_regions_path: "data/cds_chr1-22.tsv" # Path to region definitions us
 
 
 # WGS-specific scaling
-# The scaling options have no impact when not running tests with recurrence, as the cohort distribution method ignores recurrence.
+# The scaling options have no impact when not running tests with recurrence, as the cohort mutational skew method ignores recurrence.
 scale_exp_with_silent_muts: FALSE # TRUE/FALSE. Scale mutation expectations based on the number of silent mutations and mutations around the analysed region.
 silent_mut_flank_upstream: 10000 # Include this number of bases upstream for this scaling option.
 silent_mut_flank_downstream: 10000 # Include this number of bases downstream for this scaling option.
 min_silent_mutations: 10 # Require at least this number of silent mutations to perform scaling with silent mutations.
 
 # Which tests to perform. The scaling methods above are only relevant when running recurrence-based methods (recurrence or combined)
-test_cohort_distribution_alone: TRUE # TRUE/FALSE. Run cohort distribution test. This is the main method in SEISMIC, described in the paper.
+test_cohort_skew_alone: TRUE # TRUE/FALSE. Run cohort mutational skew test. This is the main method in SEISMIC, described in the paper.
 test_recurrence_alone: FALSE # TRUE/FALSE. Run test based on recurrence.
-test_combined_model: FALSE # TRUE/FALSE. Run test that evaluates both recurrence and cohort distribution.
+test_combined_model: FALSE # TRUE/FALSE. Run test that evaluates both recurrence and cohort mutational skew.
 
 # Plotting
-plotting_max_p: 0.001 # Plot all regions with a P value in the cohort distribution test lower than this. Set to 0 to disable.
+plotting_max_p: 0.001 # Plot all regions with a P value in the cohort mutational skew test lower than this. Set to 0 to disable.
 # plot_region_list: # Manually chosen regions to generate plots for
 #   - "NRAS"
 #   - "TP53"

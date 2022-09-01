@@ -34,7 +34,7 @@ wxs_covered_regions_path: "data/cds_chr1-22.tsv"
 # Which tests to perform
 # Turn scaling back on if we run the recurrence tests
 test_recurrence_alone: FALSE
-test_cohort_distribution_alone: TRUE
+test_cohort_skew_alone: TRUE
 test_combined_model: FALSE
 
 # Filtering test regions
