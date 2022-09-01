@@ -3,12 +3,12 @@ mutations_path: "demo/TCGA_UCEC_SNVs.tsv"
 # maf_cancer_column_name:
 # expression_path: "data/TCGA_mean_expression.tsv"
 # repl_timing_path: "data/replication_timing.bed"
-test_regions_path: "data/gene_cds.tsv"
+test_regions_path: "data/cds_chr1-22.tsv"
 
 out_dir: "demo/output/"
 out_base_name: "SEISMIC_demo_UCEC_WXS_result_"
 
-reference_genome: "hg19"
+reference_genome: "hg38"
 seq_type: "WXS"
 sig_type: "cohort"
 cancer_type: "UCEC"
@@ -36,6 +36,11 @@ wxs_covered_regions_path: "data/cds_chr1-22.tsv"
 test_recurrence_alone: FALSE
 test_cohort_skew_alone: TRUE
 test_combined_model: FALSE
+
+plotting_max_p: 0
+plot_region_list:
+   - "AKT1"
+plot_region_list_only: FALSE 
 
 # Filtering test regions
 remove_overlapping_test_regions: FALSE
