@@ -1380,7 +1380,7 @@ plot_cohort_dist_fit <- function(fit.gamma, obs_val, p_val){
   p <- p +
     scale_y_continuous(expand = c(0, 0)) +
     scale_fill_manual(name = '', values = c('simcolor' = '#AEC7E8'), labels = c('simcolor' = 'Simulations')) +
-    ggtitle('Cohort distribution\ntest result') +
+    ggtitle('Cohort mutational skew\ntest result') +
     theme_classic() +
     theme(
       legend.position = c(1, 1),
@@ -1428,7 +1428,7 @@ plot_cohort_dist_cumsum <- function(mutprobs_test_region_cohortdist.df, no_of_pa
     scale_color_manual(name = '', values = c("obscolor" = 'black'), labels = c("obscolor" =  effect_label)) +
     ylab("Mutated patients (cumulative)") +
     xlab('Patients ordered by mutation probability') +
-    ggtitle("Cohort distribution - cumulative mutated patients")
+    ggtitle("Cohort mutational skew - cumulative mutated patients")
   # theme(
   #   axis.title.x = element_blank()
   # )
