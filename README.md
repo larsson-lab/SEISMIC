@@ -24,13 +24,13 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 ## Installation
 
 To use the SEISMIC script, simply clone this repository, and run it according to the usage instructions below.
-There is an installation script for the required R packages (`demo/install_R_dependencies.R`) that can be sourced from the R console to install the most recent versions. The installation takes approximately 30 minutes if no packages were installed previously.
+There is an installation script for the required R packages (`demo/install_R_dependencies.R`) that can be sourced from the R console to install the most recent versions. Note that simply running the script from the command line (e.g., `Rscript install_R_dependencies.R`) may not work, as the user may not have permission to install R packages globally, and will not be able to accept local installation outside of the R console. The installation takes approximately 30 minutes if no packages were installed previously.
 
 
 ## Demo
-There is a demo script (demo/run_demo.sh) that uses SEISMIC to analyse TCGA UCEC SNVs in gene CDSs. Before running this script, make sure to install the required R packages (see above). SEISMIC will use the settings in `demo/demo_config.yaml`. If the machine running the demo has ample RAM, multi-threading can be enabled by changing the "cores" value in the config file to speed up analysis. For reference, 5-10 GB of RAM may be used per thread.
+There is a demo script (demo/run_demo.sh) that uses SEISMIC to analyse TCGA UCEC SNVs in gene CDSs. Before running this script, make sure to install the required R packages (see above). SEISMIC will use the settings in `demo/demo_config.yaml`. If the machine running the demo has ample RAM, multi-threading can be enabled by changing the "cores" value in the config file to speed up analysis. For reference, 1-2 GB of RAM may be used per thread.
 
-The demo script runs SEISMIC, which first annotates mutation effects in gene CDSs (10 min using 16 GB RAM on our system with 16 threads available), and then runs the test (1 h 40 min using \~75 GB RAM running on 10 threads on our system). The expected output is the file `demo/output/SEISMIC_demo_UCEC_WXS_result__unadjusted_bkg_mutrate_cohort_sig_UCEC_min_3_muts_10000_sims.tsv`, with genes listed by P value and the same results as in the UCEC analysis in the paper.
+The demo script runs SEISMIC, which first annotates mutation effects in gene CDSs (10 min using 16 GB RAM on our system with 16 threads available), and then runs the test (30 min using \~45 GB RAM running on 30 threads on our system). The expected output is available in demo/expected_output. Note that p-values are partially the result of random simulations, and as such will vary somewhat compared to the expected output.
 
 
 ## Usage
@@ -38,7 +38,7 @@ The demo script runs SEISMIC, which first annotates mutation effects in gene CDS
 SEISMIC is run from the command line, with a yaml config file as input argument.
 
 ```bash
-Rscript SEISMIC.R config.yaml
+./SEISMIC.R config.yaml
 ```
 
 ### Config file
