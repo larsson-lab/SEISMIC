@@ -3,6 +3,12 @@
 ## Selection Evidence Inferred from Sample-specific Modelling In Cancer
 
 SEISMIC identifies genomic regions where mutations are positively selected in cancer genomes, by analysing the distribution of mutations across a tumour cohort.
+In the absence of positive selection, mutations in a given gene will intuitively be found mostly in the tumours with the highest mutation burden overall.
+As positive selection acts on all tumours regardless of their mutation burden, cancer driver genes tend to exhibit a "skew" towards mutations occurring in low burden tumours compared to passenger genes.
+
+When assessing a gene, SEISMIC uses tumour mutation burden, as well as a trinucleotide-based mutational model, to determine the probability of observing mutations in that gene in each tumour.
+By ignoring the total number of mutations in the gene and evaluating only which tumours contain mutations, SEISMIC evaluates a selection signal that is independent of recurrence.
+This comes with other strengths and weaknesses compared to frequency-based methods, and thus provides a complement to other tools.
 
 ## System Requirements
 
@@ -57,6 +63,8 @@ Mutations (hg19 or hg38 coordinates) can either be in MAF format, or tab-separat
 - `refnuc`: reference nucleotide
 - `varnuc`: variant nucleotide
 - `sampleID`: patient ID
+
+Mutation calls of high quality are important, as false somatic mutation calls (e.g. miclassified germline mutations) are expected to be indistinguishable from drivers to SEISMIC. This is because they will exhibit a lack of correlation with tumour mutation burden, just like drivers.
 
 A file with region definitions for the regions to be analysed is required. The files used for gene CDSs, promoters, and introns in the paper are available in the data directory.
 
