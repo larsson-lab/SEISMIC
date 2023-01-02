@@ -544,6 +544,7 @@ main <- function(){
                     p.skew_and_recurrence = 'p.combined',
                     fdr.skew_and_recurrence = 'fdr.combined')
     ranks.df %>%
+      filter(test != 'ERROR') %>% 
       arrange(test, p) %>%
       group_by(test) %>% 
       mutate(fdr = p.adjust(p, method = 'fdr')) %>% 
