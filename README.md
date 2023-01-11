@@ -25,6 +25,7 @@ SEISMIC can be run on a computer or server running Linux, preferably with a dece
 - `plyranges` (1.14.0)
 - `BSgenome.Hsapiens.UCSC.hg19` (1.4.3) and/or `BSgenome.Hsapiens.UCSC.hg38` (1.4.4)
 - `cowplot` (1.1.1)
+- `R.utils` (2.12.2) - This is only required for compressed mutation files.
 
 
 ## Installation
@@ -55,7 +56,7 @@ The SEISMIC script requires a yaml config file to run. A template config file wi
 ### Preparation
 
 Mutations (hg19 or hg38 coordinates) can either be in MAF format, or tab-separated with column names at the top of the file, with the following columns:
-- `seqnames`: chromsome name (e.g., chr1)
+- `seqnames`: chromosome name (e.g., chr1)
 - `start`: 1-based position of mutation
 - `end`: 1-based position of mutation
 - `strand`: strand of the refnuc/varnuc 
@@ -64,7 +65,9 @@ Mutations (hg19 or hg38 coordinates) can either be in MAF format, or tab-separat
 - `varnuc`: variant nucleotide
 - `sampleID`: patient ID
 
-Mutation calls of high quality are important, as false somatic mutation calls (e.g. miclassified germline mutations) are expected to be indistinguishable from drivers to SEISMIC. This is because they will exhibit a lack of correlation with tumour mutation burden, just like drivers.
+Compressed files (`.gz` and `.bz2`) are supported provided that `R.utils` is installed.
+
+Mutation calls of high quality are important, as false somatic mutation calls (e.g. misclassified germline mutations) are expected to be indistinguishable from drivers to SEISMIC. This is because they will exhibit a lack of correlation with tumour mutation burden, just like drivers.
 
 A file with region definitions for the regions to be analysed is required. The files used for gene CDSs, promoters, and introns in the paper are available in the data directory.
 
