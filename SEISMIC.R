@@ -45,7 +45,7 @@ main <- function(){
   test_region_list <- test_regions.gr$test_region %>% unique()
   
   # Load region annotations, or annotate if there is no pre-existing file.
-  mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$reference_genome, config$test_regions_path, config$annotate_cds_effects)
+  mut_effects.df <- get_mut_effects(test_regions.gr, genome, config$reference_genome, config$test_regions_path, config$annotate_cds_effects, no_of_cores)
   
   cat("Loading mutations\n")
   # Read mutations. Use cancer_column_name and patient_column_name arguments if specified in config file. If not, leave blank to use function defaults.
@@ -723,7 +723,7 @@ save_mut_effects <- function(mut_effects.df, test_region_path, rds_path, md5_pat
 }
 
 
-get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path, annotate_cds_effects){
+get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path, annotate_cds_effects, no_of_cores){
   new_name <- paste0(test_region_path, '.annotated_regions', ifelse(annotate_cds_effects, '_with_mut_effects', ''), '_', assembly)
   rds_path <- paste0(new_name, '.rds')
   md5_path <- paste0(new_name, '.md5')
@@ -747,8 +747,7 @@ get_mut_effects <- function(test_regions.gr, genome, assembly, test_region_path,
       cat("Annotating regions without mutation effects\n")
     }
     codon_table.df <- make_codon_table()
-    mut_effect_cores <- min(detectCores(), 32) # Run on as many threads as possible, but limit to 32 just in case a system has a very large number of cores without a proportional amount of RAM. More than that shouldn't impact time too much anyway.
-    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, genome, codon_table.df, annotate_cds_effects), mc.cores = mut_effect_cores))
+    mut_effects.df <- do.call(bind_rows, mclapply(unique(test_regions.gr$test_region), function(x) annotate_mut_effects(test_regions.gr, x, genome, codon_table.df, annotate_cds_effects), mc.cores = no_of_cores))
     
     save_mut_effects(mut_effects.df, test_region_path, rds_path, md5_path)
   }
