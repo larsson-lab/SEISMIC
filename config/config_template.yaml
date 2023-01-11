@@ -50,4 +50,4 @@ remove_overlapping_test_regions: FALSE # TRUE/FALSE. Removes genes that overlap 
 min_mutations: 3 # Require mutations in at least this number of tumours in a gene to analyse it.
 
 no_of_simulations: 10000 # Number of cohorts to simulate
-cores: 1 # Number of threads to use. Set higher if there is enough RAM (approximately 5-10 GB used per thread)
+cores: 1 # Number of threads to use. Set higher if there is enough RAM (approximately 1-2 GB used per thread, but varies depending on the input)
