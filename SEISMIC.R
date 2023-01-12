@@ -640,7 +640,7 @@ read_mutations_from_maf <- function(path, genome, cancer_type, patient_colname =
     mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
            varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>% 
-    mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
+    mutate(trinuc = getSeq(genome, . + 1, as.character = TRUE)) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
 
@@ -657,7 +657,7 @@ read_mutations_from_tsv <- function(mutations_path, genome, cancer_type){
     mutate(refnuc = ifelse(strand == old_strand, refnuc, str_revcomp(refnuc)), 
            varnuc = ifelse(strand == old_strand, varnuc, str_revcomp(varnuc))) %>% 
     as_granges() %>%
-    mutate(trinuc = getSeq(genome, . + 1) %>% as.character()) %>% 
+    mutate(trinuc = getSeq(genome, . + 1, as.character = TRUE)) %>% 
     select(cancer, sampleID, varnuc, trinuc)
 }
 
@@ -763,7 +763,7 @@ annotate_mut_effects <- function(cds.gr, gene_val, genome, codon_table.df, annot
     arrange(start) %>%
     tile_ranges(1) %>%
     select(-partition) %>%
-    mutate(ref_trinuc = getSeq(genome, . + 1),
+    mutate(ref_trinuc = getSeq(genome, . + 1, as.character = TRUE),
            refnuc = str_sub(ref_trinuc, 2, 2)) %>%
     as_tibble() %>% 
     mutate(base_no = ifelse(strand == "+", row_number(), -(row_number() - dplyr::n() - 1)),
@@ -1782,7 +1782,7 @@ get_cds_seq <- function(test_regions.gr, test_region_arg, genome){
   region_strand <- test_regions.gr %>% filter(test_region == test_region_arg) %>% strand() %>% as.character() %>% unique()
   test_regions.gr %>%
     filter(test_region == test_region_arg) %>%
-    mutate(seq = as.character(getSeq(genome, .))) %>%
+    mutate(seq = getSeq(genome, ., as.character = TRUE)) %>%
     as_tibble() %>% 
     { if( region_strand == '+') arrange(., start) else if (region_strand == '-') arrange(., -start) } %>% 
     pull(seq) %>% 
